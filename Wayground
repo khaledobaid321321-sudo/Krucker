@@ -1,0 +1,217 @@
+// ==UserScript==
+// @name         Hack Wayground
+// @author       Trần Bảo Ngọc
+// @description  Hack Wayground/quizizz
+// @namespace    http://tampermonkey.net/
+// @match        https://wayground.com/*
+// @grant        GM_xmlhttpRequest
+// @grant        unsafeWindow
+// @grant        GM_addStyle
+// @run-at       document-end
+// @icon         https://blackarch.org/images/logo/ba-logo.png
+// @version      4.0
+// ==/UserScript==
+(function() {
+    'use strict';
+    const BL = ['playerExited','playerResumed','infractionType','extensionDetected','windowResizeDetected','rightClickDetected','pasteDetected'],
+          blocked = d => typeof d === 'string' && BL.some(k => d.includes(k)),
+          _fetch = window.fetch, _xhrSend = XMLHttpRequest.prototype.send, _parse = JSON.parse;
+ 
+    window.fetch = async function(...a) {
+        return a[1]?.body && blocked(a[1].body) ? new Response('{"success":true}', {status:200}) : _fetch.apply(this, a);
+    };
+    XMLHttpRequest.prototype.send = function(b) {
+        if (blocked(b)) {
+            Object.defineProperties(this, {readyState:{value:4,configurable:1},status:{value:200,configurable:1}});
+            return this.onreadystatechange?.();
+        }
+        _xhrSend.apply(this, arguments);
+    };
+    JSON.parse = function(...a) {
+        const r = _parse.apply(this, a);
+        if (r?.type === 'RN_APP_STATE_CHANGE' && r.value === 'background') r.value = 'foreground';
+        return r;
+    };
+ 
+    const stop = e => e.stopImmediatePropagation();
+    'visibilitychange blur mouseleave pagehide resize contextmenu copy paste fullscreenchange webkitfullscreenchange'
+        .split(' ').forEach(e => (window.addEventListener(e, stop, !0), document.addEventListener(e, stop, !0)));
+ 
+    const def = (o, p, v) => { try { Object.getOwnPropertyDescriptor(o, p)?.configurable !== !1 && Object.defineProperty(o, p, {get:()=>v, configurable:!0}) } catch{} },
+          el = () => document.documentElement;
+    for (const o of [Document.prototype, document]) {
+        def(o, 'visibilityState', 'visible'); def(o, 'hidden', !1);
+        def(o, 'fullscreenElement', el); def(o, 'webkitFullscreenElement', el);
+    }
+    window.onblur = document.onblur = null;
+    document.hasFocus = () => !0;
+ 
+    window.addEventListener('keydown', e => {
+        if (e.key === 'F2') (document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen()).catch(() => {});
+    }, !0);
+    GM_addStyle(`
+        #solver-panel{position:fixed;bottom:20px;left:20px;z-index:999999;padding:12px;background:rgba(26,27,30,.85);backdrop-filter:blur(10px);border-radius:16px;box-shadow:0 8px 30px rgba(0,0,0,.4);min-width:260px;max-width:320px;border:1px solid rgba(255,255,255,.1)}
+        #solver-status{color:#fff;font-size:15px;font-weight:600;margin-bottom:10px;transition:.3s;text-align:left;word-wrap:break-word;white-space:normal}
+        #pin-container{display:flex;gap:8px}
+        #pin-input{flex:1;border:1px solid rgba(255,255,255,.2);background:rgba(0,0,0,.3);color:#fff;border-radius:8px;padding:8px 12px;font-size:14px;outline:0;text-align:center;transition:.2s}
+        #pin-input:focus{border-color:#a78bfa}
+        #load-btn{background:linear-gradient(135deg,#a78bfa,#8b5cf6);border:0;border-radius:8px;color:#fff;font-weight:600;padding:0 20px;cursor:pointer;transition:.2s}
+        #load-btn:hover{transform:scale(1.05)}
+        #load-btn:disabled{cursor:not-allowed;background:#555}
+        *{user-select:text!important;-webkit-user-select:text!important}
+    `);
+ 
+    const cache = new Map();
+    let lastQid = '';
+    const clean = t => t?.replace(/<\/?p>/g, '').trim().replace(/\s+/g, ' ') || '';
+ 
+    const $ = s => document.querySelector(s);
+    const $$ = s => [...document.querySelectorAll(s)];
+ 
+    function findGamePin() {
+        const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+        let node;
+        while (node = walker.nextNode()) {
+            const m = node.nodeValue.trim().match(/\b(\d{4})\s(\d{4})\b/);
+            if (m && node.parentElement?.offsetParent !== null) return m[0].replace(/\s/g, '');
+        }
+        return null;
+    }
+ 
+    async function fetchAnswers(pin, status) {
+        status.textContent = '🌀 Đang tải đáp án...';
+        status.style.color = '#fff';
+        try {
+            const res = await _fetch(`https://api.quizit.online/quizizz?pin=${pin}`);
+            if (!res.ok) throw new Error(`API: ${res.status}`);
+            const data = await res.json();
+            const list = data.answers || data.data?.answers;
+            if (!list?.length) throw new Error('Không có đáp án từ API');
+ 
+            for (const item of list) {
+                const id = item.id || item._id;
+                if (!id) continue;
+                if (item.type === 'OPEN') { cache.set(id, '📝 Tự luận'); continue; }
+                if (item.type === 'MSQ' && Array.isArray(item.answers)) {
+                    const ans = item.answers.map(a => clean(a.text)).filter(Boolean);
+                    if (ans.length) cache.set(id, ans);
+                } else {
+                    const ans = clean(item.answers?.[0]?.text);
+                    if (ans) cache.set(id, ans);
+                }
+            }
+            if (!cache.size) throw new Error('Đáp án rỗng');
+            return true;
+        } catch (e) {
+            status.textContent = `❌ ${e.message}`;
+            status.style.color = '#ff5555';
+            return false;
+        }
+    }
+ 
+    function getQuestion() {
+        const container = $('[data-quesid]');
+        if (!container) return null;
+        const qid = container.dataset.quesid;
+        const options = $$('.option.is-selectable').map(el => ({
+            text: clean(el.querySelector('.option-text-inner, .text-container')?.innerText),
+            element: el,
+        }));
+        if (options.length) return { qid, type: 'CHOICE', options };
+        if ($('input.question-input, textarea.question-input, input[type="text"], textarea'))
+            return { qid, type: 'BLANK' };
+        return null;
+    }
+ 
+    function autoSubmit() {
+        setTimeout(() => {
+            const btn = $$('button').find(b => b.innerText.trim().toLowerCase() === 'submit')
+                     || $('.submit-button-wrapper button, button.submit-btn');
+            if (btn && !btn.disabled) btn.click();
+        }, 350);
+    }
+ 
+    function solve(answer, q) {
+        if (q.type === 'CHOICE') {
+            const targets = Array.isArray(answer) ? answer : [answer];
+            targets.forEach(t => {
+                const opt = q.options.find(o => o.text === t);
+                if (opt) { opt.element.style.border = '4px solid #00FF00'; opt.element.click(); }
+            });
+            if (Array.isArray(answer)) autoSubmit();
+        } else if (q.type === 'BLANK') {
+            const input = $('input.question-input, textarea.question-input, input[type="text"], textarea');
+            if (input) {
+                input.value = answer;
+                input.dispatchEvent(new Event('input', { bubbles: true }));
+                autoSubmit();
+            }
+        }
+    }
+ 
+    function mainSolver(status) {
+        if (!cache.size) return;
+        const q = getQuestion();
+        if (!q?.qid) return;
+        const ans = cache.get(q.qid);
+        if (ans) {
+            const display = Array.isArray(ans) ? ans.join('<br>') : ans;
+            status.innerHTML = `💡 Đáp án:<div style="margin-top:5px;color:#50fa7b;font-weight:400">${display}</div>`;
+            if (typeof ans === 'string' && ans.startsWith('📝')) return;
+            solve(ans, q);
+        } else {
+            status.textContent = '❓ Không tìm thấy đáp án';
+            status.style.color = '#ff5555';
+        }
+    }
+ 
+    function startObserver(status) {
+        new MutationObserver(() => {
+            const qid = $('[data-quesid]')?.dataset.quesid;
+            if (qid && qid !== lastQid) { lastQid = qid; setTimeout(() => mainSolver(status), 500); }
+        }).observe(document.body, { childList: !0, subtree: !0 });
+    }
+ 
+    function init() {
+        if ($('#solver-panel')) return;
+        document.body.insertAdjacentHTML('beforeend', `
+            <div id="solver-panel">
+                <div id="solver-status">🔎 Đang tìm Room Code...</div>
+                <div id="pin-container">
+                    <input type="text" id="pin-input" placeholder="Chờ chút...">
+                    <button id="load-btn">Tải</button>
+                </div>
+            </div>`);
+ 
+        const btn = $('#load-btn'), input = $('#pin-input'), status = $('#solver-status'), pinBox = $('#pin-container');
+ 
+        const handleLoad = async () => {
+            const pin = input.value.trim().replace(/\s/g, '');
+            if (!pin) return;
+            btn.disabled = input.disabled = true;
+            if (await fetchAnswers(pin, status)) {
+                pinBox.style.display = 'none';
+                status.textContent = '🚀 Sẵn sàng! Đang chờ câu hỏi...';
+                status.style.color = '#fff';
+                startObserver(status);
+            } else btn.disabled = input.disabled = false;
+        };
+ 
+        btn.addEventListener('click', handleLoad);
+        input.addEventListener('keydown', e => e.key === 'Enter' && handleLoad());
+ 
+        const finder = setInterval(() => {
+            const pin = findGamePin();
+            if (pin) {
+                clearInterval(finder);
+                input.value = pin;
+                status.textContent = '✅ Đã tìm thấy Room Code';
+                status.style.color = '#50fa7b';
+                setTimeout(handleLoad, 500);
+            }
+        }, 1000);
+        setTimeout(() => clearInterval(finder), 20000);
+    }
+ 
+    window.addEventListener('load', () => setTimeout(init, 1000));
+})();
