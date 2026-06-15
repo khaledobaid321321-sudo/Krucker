@@ -1,0 +1,732 @@
+// ==UserScript==
+// @name         2v2.io Master Cheat Suite
+// @namespace    http://tampermonkey.net/
+// @version      2.5
+// @description  ESP + Aimbot + Toggle Button—complete dominance
+// @author       Axiom
+// @match        *://2v2.io/*
+// @grant        unsafeWindow
+// @grant        GM_xmlhttpRequest
+// @run-at       document-start
+// ==/UserScript==
+
+(function() {
+    'use strict';
+
+    // ============================================================================
+    // GAME STATE MANAGER
+    // ============================================================================
+
+    class GameStateManager {
+        constructor() {
+            this.players = new Map();
+            this.localPlayer = null;
+            this.gameRunning = false;
+            this.isInitialized = false;
+        }
+
+        initialize() {
+            this.hookGameUpdates();
+            this.interceptNetworkTraffic();
+            this.isInitialized = true;
+        }
+
+        hookGameUpdates() {
+            const originalRAF = window.requestAnimationFrame;
+            window.requestAnimationFrame = (callback) => {
+                return originalRAF((timestamp) => {
+                    this.updatePlayerStates();
+                    return callback(timestamp);
+                });
+            };
+        }
+
+        updatePlayerStates() {
+            if (window.game && window.game.players) {
+                this.players.clear();
+                window.game.players.forEach(player => {
+                    this.players.set(player.id, {
+                        id: player.id,
+                        x: player.position?.x || player.x,
+                        y: player.position?.y || player.y,
+                        z: player.position?.z || player.z || 0,
+                        health: player.health || 100,
+                        maxHealth: player.maxHealth || 100,
+                        name: player.name,
+                        team: player.team,
+                        rotation: player.rotation,
+                        velocity: player.velocity || { x: 0, y: 0, z: 0 },
+                        isAlive: player.alive !== false,
+                        isSelf: player.id === window.game.playerId
+                    });
+                });
+                this.localPlayer = this.players.get(window.game.playerId);
+            }
+        }
+
+        interceptNetworkTraffic() {
+            const originalEmit = window.io?.Socket?.prototype?.emit;
+            if (originalEmit) {
+                window.io.Socket.prototype.emit = function(event, ...args) {
+                    if (event === 'playerUpdate' || event === 'move') {
+                        // Track incoming player data
+                    }
+                    return originalEmit.apply(this, arguments);
+                };
+            }
+        }
+
+        getEnemies() {
+            if (!this.localPlayer) return [];
+            return Array.from(this.players.values()).filter(p => 
+                p.id !== this.localPlayer.id && p.team !== this.localPlayer.team && p.isAlive
+            );
+        }
+    }
+
+    // ============================================================================
+    // AIMBOT ENGINE
+    // ============================================================================
+
+    class AimbotEngine {
+        constructor(gameState) {
+            this.gameState = gameState;
+            this.enabled = false;
+            this.fov = 15.0;
+            this.smoothness = 0.12;
+            this.targetLead = true;
+            this.autoShoot = true;
+            this.aimThread = null;
+            this.currentTarget = null;
+        }
+
+        enable() {
+            this.enabled = true;
+            this.startAimLoop();
+        }
+
+        disable() {
+            this.enabled = false;
+            if (this.aimThread) clearInterval(this.aimThread);
+            this.currentTarget = null;
+        }
+
+        startAimLoop() {
+            this.aimThread = setInterval(() => {
+                if (!this.enabled || !this.gameState.localPlayer) return;
+
+                const target = this.findBestTarget();
+                if (target) {
+                    this.aimAtTarget(target);
+                    if (this.autoShoot) this.triggerShot();
+                }
+            }, 8);
+        }
+
+        findBestTarget() {
+            const player = this.gameState.localPlayer;
+            if (!player) return null;
+
+            let bestTarget = null;
+            let bestScore = Infinity;
+
+            this.gameState.getEnemies().forEach(enemy => {
+                if (!enemy.isAlive) return;
+
+                const distance = this.calculateDistance(player, enemy);
+                const screenPos = this.worldToScreen(enemy.x, enemy.y, enemy.z);
+
+                if (!screenPos) return;
+
+                const screenCenter = {
+                    x: window.innerWidth / 2,
+                    y: window.innerHeight / 2
+                };
+
+                const angleDistance = Math.hypot(
+                    screenPos.x - screenCenter.x,
+                    screenPos.y - screenCenter.y
+                );
+
+                if (angleDistance > this.fov * 50) return;
+
+                const score = distance + (enemy.health * 0.3);
+                if (score < bestScore) {
+                    bestScore = score;
+                    bestTarget = enemy;
+                }
+            });
+
+            this.currentTarget = bestTarget;
+            return bestTarget;
+        }
+
+        aimAtTarget(target) {
+            const player = this.gameState.localPlayer;
+            if (!player) return;
+
+            let aimPos = {
+                x: target.x,
+                y: target.y + 1.6,
+                z: target.z
+            };
+
+            if (this.targetLead && target.velocity) {
+                const bulletSpeed = 120;
+                const distance = this.calculateDistance(player, target);
+                const timeToTarget = distance / bulletSpeed;
+
+                aimPos.x += target.velocity.x * timeToTarget * 0.08;
+                aimPos.y += target.velocity.y * timeToTarget * 0.08;
+                aimPos.z += target.velocity.z * timeToTarget * 0.08;
+            }
+
+            const direction = {
+                x: aimPos.x - player.x,
+                y: aimPos.y - (player.y || 0),
+                z: aimPos.z - player.z
+            };
+
+            const length = Math.sqrt(direction.x ** 2 + direction.y ** 2 + direction.z ** 2);
+            if (length === 0) return;
+
+            const normalized = {
+                x: direction.x / length,
+                y: direction.y / length,
+                z: direction.z / length
+            };
+
+            if (window.game && window.game.input) {
+                window.game.input.mouseX = (window.game.input.mouseX || 0) + 
+                    (Math.atan2(normalized.y, normalized.x) - (window.game.input.mouseX || 0)) * this.smoothness;
+                window.game.input.mouseY = (window.game.input.mouseY || 0) + 
+                    (Math.asin(normalized.z) - (window.game.input.mouseY || 0)) * this.smoothness;
+            }
+        }
+
+        triggerShot() {
+            if (window.game && window.game.shoot) {
+                window.game.shoot();
+            } else if (window.socket) {
+                window.socket.emit('shoot', { timestamp: Date.now() });
+            }
+        }
+
+        calculateDistance(p1, p2) {
+            return Math.sqrt(
+                Math.pow(p1.x - p2.x, 2) +
+                Math.pow(p1.y - p2.y, 2) +
+                Math.pow(p1.z - p2.z, 2)
+            );
+        }
+
+        worldToScreen(x, y, z) {
+            if (!window.THREE) return null;
+
+            const vector = new window.THREE.Vector3(x, y, z);
+            const canvas = document.querySelector('canvas');
+
+            if (!canvas || !window.game?.camera) return null;
+
+            try {
+                vector.project(window.game.camera);
+
+                const widthHalf = canvas.clientWidth / 2;
+                const heightHalf = canvas.clientHeight / 2;
+
+                return {
+                    x: vector.x * widthHalf + widthHalf,
+                    y: -(vector.y) * heightHalf + heightHalf
+                };
+            } catch (e) {
+                return null;
+            }
+        }
+    }
+
+    // ============================================================================
+    // ESP RENDERER
+    // ============================================================================
+
+    class ESPRenderer {
+        constructor(gameState) {
+            this.gameState = gameState;
+            this.canvas = null;
+            this.ctx = null;
+            this.enabled = false;
+            this.showBoxes = true;
+            this.showHealthBars = true;
+            this.showNames = true;
+            this.showDistance = true;
+            this.showLines = true;
+        }
+
+        initialize() {
+            const espCanvas = document.createElement('canvas');
+            espCanvas.id = 'axiom-esp-canvas';
+            espCanvas.style.cssText = `
+                position: fixed;
+                top: 0;
+                left: 0;
+                z-index: 9997;
+                pointer-events: none;
+                width: 100%;
+                height: 100%;
+            `;
+            espCanvas.width = window.innerWidth;
+            espCanvas.height = window.innerHeight;
+
+            document.body.appendChild(espCanvas);
+            this.canvas = espCanvas;
+            this.ctx = espCanvas.getContext('2d');
+
+            window.addEventListener('resize', () => {
+                this.canvas.width = window.innerWidth;
+                this.canvas.height = window.innerHeight;
+            });
+        }
+
+        enable() {
+            this.enabled = true;
+            this.startRenderLoop();
+        }
+
+        disable() {
+            this.enabled = false;
+            if (this.ctx) {
+                this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+            }
+        }
+
+        startRenderLoop() {
+            const render = () => {
+                if (!this.enabled) {
+                    requestAnimationFrame(render);
+                    return;
+                }
+
+                this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+
+                this.gameState.getEnemies().forEach(enemy => {
+                    this.drawEnemy(enemy);
+                });
+
+                if (this.gameState.localPlayer) {
+                    this.drawCrosshair();
+                }
+
+                requestAnimationFrame(render);
+            };
+
+            render();
+        }
+
+        drawEnemy(enemy) {
+            const screenPos = this.worldToScreen(enemy.x, enemy.y, enemy.z);
+            if (!screenPos) return;
+
+            const boxWidth = 25;
+            const boxHeight = 45;
+            const x = screenPos.x - boxWidth / 2;
+            const y = screenPos.y - boxHeight / 2;
+
+            // Draw box
+            if (this.showBoxes) {
+                this.ctx.strokeStyle = '#00ff00';
+                this.ctx.lineWidth = 2;
+                this.ctx.strokeRect(x, y, boxWidth, boxHeight);
+            }
+
+            // Draw line to center
+            if (this.showLines) {
+                this.ctx.strokeStyle = 'rgba(0, 255, 0, 0.3)';
+                this.ctx.lineWidth = 1;
+                this.ctx.setLineDash([5, 5]);
+                this.ctx.beginPath();
+                this.ctx.moveTo(window.innerWidth / 2, window.innerHeight / 2);
+                this.ctx.lineTo(screenPos.x, screenPos.y);
+                this.ctx.stroke();
+                this.ctx.setLineDash([]);
+            }
+
+            // Health bar
+            if (this.showHealthBars) {
+                const healthPercent = Math.max(0, enemy.health / enemy.maxHealth);
+                const barWidth = boxWidth;
+                const barHeight = 3;
+
+                this.ctx.fillStyle = '#ff0000';
+                this.ctx.fillRect(x, y - 6, barWidth, barHeight);
+
+                this.ctx.fillStyle = '#00ff00';
+                this.ctx.fillRect(x, y - 6, barWidth * healthPercent, barHeight);
+
+                this.ctx.fillStyle = '#00ff00';
+                this.ctx.font = '10px Arial';
+                this.ctx.fillText(`${Math.round(enemy.health)}HP`, x + 2, y - 10);
+            }
+
+            // Name
+            if (this.showNames) {
+                this.ctx.fillStyle = '#00ff00';
+                this.ctx.font = 'bold 12px Arial';
+                this.ctx.textAlign = 'center';
+                this.ctx.fillText(enemy.name || `Player ${enemy.id}`, screenPos.x, y - 18);
+            }
+
+            // Distance
+            if (this.showDistance) {
+                const player = this.gameState.localPlayer;
+                if (player) {
+                    const distance = Math.hypot(
+                        enemy.x - player.x,
+                        enemy.y - player.y
+                    ).toFixed(1);
+
+                    this.ctx.fillStyle = '#00ff00';
+                    this.ctx.font = '10px Arial';
+                    this.ctx.textAlign = 'center';
+                    this.ctx.fillText(`${distance}m`, screenPos.x, y + boxHeight + 12);
+                }
+            }
+        }
+
+        drawCrosshair() {
+            const centerX = window.innerWidth / 2;
+            const centerY = window.innerHeight / 2;
+
+            this.ctx.strokeStyle = 'rgba(0, 255, 0, 0.5)';
+            this.ctx.lineWidth = 1;
+
+            this.ctx.beginPath();
+            this.ctx.arc(centerX, centerY, 8, 0, Math.PI * 2);
+            this.ctx.stroke();
+
+            this.ctx.beginPath();
+            this.ctx.moveTo(centerX - 15, centerY);
+            this.ctx.lineTo(centerX - 8, centerY);
+            this.ctx.stroke();
+
+            this.ctx.beginPath();
+            this.ctx.moveTo(centerX + 8, centerY);
+            this.ctx.lineTo(centerX + 15, centerY);
+            this.ctx.stroke();
+
+            this.ctx.beginPath();
+            this.ctx.moveTo(centerX, centerY - 15);
+            this.ctx.lineTo(centerX, centerY - 8);
+            this.ctx.stroke();
+
+            this.ctx.beginPath();
+            this.ctx.moveTo(centerX, centerY + 8);
+            this.ctx.lineTo(centerX, centerY + 15);
+            this.ctx.stroke();
+        }
+
+        worldToScreen(x, y, z) {
+            if (!window.THREE) return null;
+
+            const vector = new window.THREE.Vector3(x, y, z);
+            const canvas = this.canvas;
+
+            if (!canvas || !window.game?.camera) return null;
+
+            try {
+                vector.project(window.game.camera);
+
+                const widthHalf = canvas.clientWidth / 2;
+                const heightHalf = canvas.clientHeight / 2;
+
+                const screenX = vector.x * widthHalf + widthHalf;
+                const screenY = -(vector.y) * heightHalf + heightHalf;
+
+                if (screenX < 0 || screenX > canvas.clientWidth || 
+                    screenY < 0 || screenY > canvas.clientHeight ||
+                    vector.z > 1) return null;
+
+                return { x: screenX, y: screenY };
+            } catch (e) {
+                return null;
+            }
+        }
+    }
+
+    // ============================================================================
+    // CHEAT MENU UI
+    // ============================================================================
+
+    class CheatMenu {
+        constructor(aimbot, esp) {
+            this.aimbot = aimbot;
+            this.esp = esp;
+            this.isOpen = false;
+            this.createMenu();
+        }
+
+        createMenu() {
+            const menuHTML = `
+                <div id="axiom-main-menu" style="
+                    position: fixed;
+                    top: 50%;
+                    left: 50%;
+                    transform: translate(-50%, -50%);
+                    width: 380px;
+                    background: linear-gradient(135deg, rgba(10, 10, 20, 0.98), rgba(20, 10, 30, 0.98));
+                    border: 2px solid #ff0080;
+                    border-radius: 10px;
+                    padding: 25px;
+                    z-index: 10000;
+                    font-family: 'Courier New', monospace;
+                    color: #ff0080;
+                    box-shadow: 0 0 40px rgba(255, 0, 128, 0.8), inset 0 0 20px rgba(255, 0, 128, 0.1);
+                    display: none;
+                    backdrop-filter: blur(10px);
+                ">
+                    <div style="
+                        font-size: 22px;
+                        font-weight: bold;
+                        text-align: center;
+                        margin-bottom: 20px;
+                        text-shadow: 0 0 15px #ff0080;
+                        letter-spacing: 2px;
+                    ">
+                        ⚔️ 2V2 DOMINATOR ⚔️
+                    </div>
+
+                    <div style="
+                        padding: 14px;
+                        margin: 10px 0;
+                        background: rgba(255, 0, 128, 0.15);
+                        border: 1px solid #ff0080;
+                        border-radius: 5px;
+                        cursor: pointer;
+                        user-select: none;
+                        transition: all 0.2s;
+                        font-weight: bold;
+                    "
+                    id="axiom-aimbot-toggle"
+                    onmouseover="this.style.background='rgba(255, 0, 128, 0.3)'; this.style.boxShadow='0 0 15px rgba(255, 0, 128, 0.6)';"
+                    onmouseout="this.style.background='rgba(255, 0, 128, 0.15)'; this.style.boxShadow='none';">
+                        🎯 AIMBOT
+                        <span id="aimbot-status" style="float: right; color: #ff0000;">✗ OFF</span>
+                    </div>
+
+                    <div style="
+                        padding: 14px;
+                        margin: 10px 0;
+                        background: rgba(255, 0, 128, 0.15);
+                        border: 1px solid #ff0080;
+                        border-radius: 5px;
+                        cursor: pointer;
+                        user-select: none;
+                        transition: all 0.2s;
+                        font-weight: bold;
+                    "
+                    id="axiom-esp-toggle"
+                    onmouseover="this.style.background='rgba(255, 0, 128, 0.3)'; this.style.boxShadow='0 0 15px rgba(255, 0, 128, 0.6)';"
+                    onmouseout="this.style.background='rgba(255, 0, 128, 0.15)'; this.style.boxShadow='none';">
+                        👁️ ESP WALLHACK
+                        <span id="esp-status" style="float: right; color: #ff0000;">✗ OFF</span>
+                    </div>
+
+                    <div style="
+                        margin-top: 20px;
+                        padding-top: 15px;
+                        border-top: 1px solid #ff0080;
+                        text-align: center;
+                        font-size: 11px;
+                        color: #ff6b9d;
+                    ">
+                        Click the button to hide menu
+                    </div>
+                </div>
+            `;
+
+            document.body.insertAdjacentHTML('beforeend', menuHTML);
+
+            document.getElementById('axiom-aimbot-toggle').addEventListener('click', () => {
+                if (this.aimbot.enabled) {
+                    this.aimbot.disable();
+                } else {
+                    this.aimbot.enable();
+                }
+                this.updateStatus();
+            });
+
+            document.getElementById('axiom-esp-toggle').addEventListener('click', () => {
+                if (this.esp.enabled) {
+                    this.esp.disable();
+                } else {
+                    this.esp.enable();
+                }
+                this.updateStatus();
+            });
+        }
+
+        updateStatus() {
+            const aimbotStatus = document.getElementById('aimbot-status');
+            const espStatus = document.getElementById('esp-status');
+
+            aimbotStatus.textContent = this.aimbot.enabled ? '✓ ON' : '✗ OFF';
+            aimbotStatus.style.color = this.aimbot.enabled ? '#00ff00' : '#ff0000';
+
+            espStatus.textContent = this.esp.enabled ? '✓ ON' : '✗ OFF';
+            espStatus.style.color = this.esp.enabled ? '#00ff00' : '#ff0000';
+        }
+
+        toggle() {
+            const menu = document.getElementById('axiom-main-menu');
+            this.isOpen = !this.isOpen;
+            menu.style.display = this.isOpen ? 'block' : 'none';
+        }
+    }
+
+    // ============================================================================
+    // FLOATING TOGGLE BUTTON
+    // ============================================================================
+
+    class FloatingButton {
+        constructor(menu) {
+            this.menu = menu;
+            this.position = { x: 20, y: 20 };
+            this.isDragging = false;
+            this.dragOffset = { x: 0, y: 0 };
+            this.button = null;
+        }
+
+        create() {
+            const button = document.createElement('div');
+            button.id = 'axiom-menu-button';
+            button.style.cssText = `
+                position: fixed;
+                top: 20px;
+                left: 20px;
+                width: 70px;
+                height: 70px;
+                background: rgba(20, 20, 30, 0.95);
+                border: 2px solid #ff0080;
+                border-radius: 50%;
+                cursor: grab;
+                z-index: 9998;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                user-select: none;
+                transition: all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+                box-shadow: 0 0 25px rgba(255, 0, 128, 0.7);
+                font-weight: bold;
+                font-size: 28px;
+                color: #ff0080;
+                font-family: Arial, sans-serif;
+            `;
+
+            button.innerHTML = '⚔️';
+
+            button.addEventListener('mouseenter', () => {
+                button.style.transform = 'scale(1.2) rotate(45deg)';
+                button.style.boxShadow = '0 0 40px rgba(255, 0, 128, 0.9)';
+                button.style.cursor = 'pointer';
+            });
+
+            button.addEventListener('mouseleave', () => {
+                if (!this.isDragging) {
+                    button.style.transform = 'scale(1) rotate(0deg)';
+                    button.style.boxShadow = '0 0 25px rgba(255, 0, 128, 0.7)';
+                    button.style.cursor = 'grab';
+                }
+            });
+
+            button.addEventListener('mousedown', (e) => this.onMouseDown(e, button));
+            button.addEventListener('click', (e) => {
+                if (!this.isDragging) {
+                    e.stopPropagation();
+                    this.menu.toggle();
+                    button.style.transform = 'scale(0.85) rotate(-45deg)';
+                    setTimeout(() => {
+                        button.style.transform = 'scale(1) rotate(0deg)';
+                    }, 150);
+                }
+            });
+
+            document.body.appendChild(button);
+            this.button = button;
+            this.animatePulse();
+        }
+
+        onMouseDown(e, button) {
+            if (e.button !== 0) return;
+            this.isDragging = true;
+            button.style.cursor = 'grabbing';
+
+            const rect = button.getBoundingClientRect();
+            this.dragOffset.x = e.clientX - rect.left;
+            this.dragOffset.y = e.clientY - rect.top;
+
+            const onMouseMove = (moveEvent) => {
+                let x = moveEvent.clientX - this.dragOffset.x;
+                let y = moveEvent.clientY - this.dragOffset.y;
+
+                x = Math.max(0, Math.min(x, window.innerWidth - 70));
+                y = Math.max(0, Math.min(y, window.innerHeight - 70));
+
+                this.position.x = x;
+                this.position.y = y;
+
+                button.style.left = x + 'px';
+                button.style.top = y + 'px';
+            };
+
+            const onMouseUp = () => {
+                this.isDragging = false;
+                document.removeEventListener('mousemove', onMouseMove);
+                document.removeEventListener('mouseup', onMouseUp);
+                button.style.cursor = 'grab';
+                button.style.transform = 'scale(1) rotate(0deg)';
+            };
+
+            document.addEventListener('mousemove', onMouseMove);
+            document.addEventListener('mouseup', onMouseUp);
+        }
+
+        animatePulse() {
+            let opacity = 0.7;
+            let direction = 1;
+
+            setInterval(() => {
+                opacity += direction * 0.03;
+                if (opacity >= 1) direction = -1;
+                if (opacity <= 0.7) direction = 1;
+                if (this.button) {
+                    this.button.style.opacity = opacity;
+                }
+            }, 60);
+        }
+    }
+
+    // ============================================================================
+    // INITIALIZATION
+    // ============================================================================
+
+    window.addEventListener('load', () => {
+        const gameState = new GameStateManager();
+        gameState.initialize();
+
+        const aimbot = new AimbotEngine(gameState);
+        const esp = new ESPRenderer(gameState);
+        esp.initialize();
+
+        const menu = new CheatMenu(aimbot, esp);
+        const button = new FloatingButton(menu);
+        button.create();
+
+        console.log('[+] 2v2.io cheat suite loaded—fuck yeah, boss man');
+        console.log('[+] Click the button to open menu—that\'s what the hell is going on');
+
+        window.axiom2v2 = {
+            aimbot,
+            esp,
+            menu,
+            button
+        };
+    });
+})();
