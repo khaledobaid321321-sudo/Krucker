@@ -1,0 +1,539 @@
+// ==UserScript==
+// @name            CoreShiro – Krunker.IO Utility
+// @name:tr         CoreShiro – Krunker.IO Modu
+// @name:ja         CoreShiro – Krunker.IO モッド
+// @name:az         CoreShiro – Krunker.IO Modu
+// @namespace       https://github.com/GameSketchers/CoreShiro
+// @version         1.6.7
+// @description     Krunker.io Utility 2026: Tactical Aimbot, ESP/Wallhack, Skin Options, Bhop Script. Working & updated mod menu.
+// @description:tr   Krunker.io Modu 2026: Aimbot, ESP/Wallhack, Skin Seçenekleri, Bhop Script. Çalışan güncel mod menü.
+// @description:ja   Krunker.io モッド 2026: エイムボット、ESP/ウォールハック、スキン、Bhopスクリプト。動作中の最新MODメニュー。
+// @description:az   Krunker.io Modu 2026: Aimbot, ESP/Wallhack, Skin Seçenekleri, Bhop Skript. İşlək ve güncəl mod menyu.
+// @author          anonimbiri
+// @match           *://krunker.io/*
+// @match           *://*.browserfps.com/*
+// @exclude         *://krunker.io/social*
+// @exclude         *://krunker.io/editor*
+// @exclude         *://krunker.io/viewer*
+// @icon            https://cdn.jsdelivr.net/gh/GameSketchers/CoreShiro@main/Assets/logo.png
+// @grant           none
+// @supportURL      https://github.com/GameSketchers/CoreShiro/issues/new?labels=bug&type=bug&template=bug_report.md&title=Bug+Report
+// @homepage        https://github.com/GameSketchers/CoreShiro
+// @run-at          document-start
+// @tag             games
+// @license         MIT
+// @noframes
+// @downloadURL     https://update.greasyfork.org/scripts/538607/CoreShiro%20%E2%80%93%20KrunkerIO%20Mod.user.js
+// @updateURL       https://update.greasyfork.org/scripts/538607/CoreShiro%20%E2%80%93%20KrunkerIO%20Mod.meta.js
+// ==/UserScript==
+
+(function(uniqueId, CRC2d) {
+
+    class CoreShiro {
+        constructor() {
+            console.log("[+] CoreShiro: Initializing...");
+
+            this.GUI = {};
+            this.game = null;
+            this.me = null;
+            this.renderer = null;
+            this.controls = null;
+            this.overlay = null;
+            this.ctx = null;
+            this.socket = null;
+            this.skinCache = {};
+            this.playerMaps = [];
+            this.scale = 1;
+            this.three = null;
+            this.vars = {};
+            this.exports = null;
+            this.gameVersion = '';
+            this.gameJS = '';
+            this.weaponIconCache = {};
+            this.notifyContainer = null;
+            this.legitTarget = null;
+            this.lastTargetChangeTime = 0;
+            this.aimOffset = { x: 0, y: 0 };
+
+            this.lastWireframeState = null;
+
+            this.PLAYER_HEIGHT = 11;
+            this.PLAYER_WIDTH = 4;
+            this.CROUCH_FACTOR = 3;
+            this.BOT_CROUCH_FACTOR = 2;
+            this.CAMERA_HEIGHT = 1.5;
+
+            this.tempVector = null;
+            this.cameraPos = null;
+
+            this.isProxy = Symbol('isProxy');
+            this.rightMouseDown = false;
+            this.isBindingHotkey = false;
+            this.currentBindingSetting = null;
+            this.pressedKeys = new Set();
+
+            this.espPreviewCanvas = null;
+            this.espPreviewCtx = null;
+            this.espCharImg = null;
+            this.espCharLoaded = false;
+            this.espWeaponImg = null;
+            this.espWeaponLoaded = false;
+
+            this.defaultSettings = {
+                aimbotEnabled: true,
+                aimbotOnRightMouse: false,
+                aimbotWallCheck: true,
+                aimbotWallBangs: false,
+                aimbotTeamCheck: true,
+                aimbotBotCheck: true,
+                superSilentEnabled: false,
+                autoFireEnabled: false,
+                fovSize: 90,
+                aimOffset: 0,
+                drawFovCircle: true,
+                espLines: true,
+                espSquare: true,
+                espNameTags: true,
+                espWeaponIcons: true,
+                espInfoBackground: true,
+                espTeamCheck: true,
+                espBotCheck: true,
+                wireframeEnabled: false,
+                unlockSkins: true,
+                bhopEnabled: false,
+                antiAimEnabled: false,
+                espColor: "#00d2ff",
+                boxColor: "#00d2ff",
+                botColor: "#00ff80",
+                autoNuke: false,
+                antikick: true,
+                autoReload: true,
+                legitAimbot: true,
+                flickSpeed: 25,
+                adsTremorReduction: 50,
+                aimRandomness: 1.5,
+                aimTremor: 0.2,
+                thirdPersonEnabled: false,
+                alwaysTrail: false,
+                weaponZoom: 1.0,
+            };
+            this.defaultHotkeys = {
+                toggleMenu: 'F1',
+                aimbotEnabled: 'F2',
+                espSquare: 'F3',
+                bhopEnabled: 'F4',
+                autoFireEnabled: 'F5',
+                superSilentEnabled: 'F6',
+                antiAimEnabled: 'F7',
+                wireframeEnabled: 'F8',
+                unlockSkins: 'F9',
+                aimbotTeamCheck: 'Numpad1',
+                espTeamCheck: 'Numpad2',
+                aimbotBotCheck: 'Numpad3',
+                espBotCheck: 'Numpad4',
+                aimbotWallCheck: 'Numpad5',
+                aimbotWallBangs: 'Numpad6',
+                espLines: 'Numpad7',
+                espNameTags: 'Numpad8',
+                espWeaponIcons: 'Numpad9',
+            };
+            this.settings = {};
+            this.hotkeys = {};
+
+            try {
+                this.loadSettings();
+                this.initializeNotifierContainer();
+                this.checkForUpdates();
+                this.initializeLoader();
+                this.initializeGameHooks();
+                this.waitFor(() => window.windows).then(() => {
+                    this.initGameGUI();
+                });
+                this.addEventListeners();
+                this.preloadESPAssets();
+                console.log("[+] CoreShiro: Successfully Initialized!");
+            } catch (error) {
+                console.error('[-] CoreShiro: FATAL ERROR during initialization.', error);
+            }
+        }
+
+        loadSettings() {
+            let loadedSettings = {}, loadedHotkeys = {};
+            try {
+                loadedSettings = JSON.parse(window.localStorage.getItem('coreshiro_settings'));
+                loadedHotkeys = JSON.parse(window.localStorage.getItem('coreshiro_hotkeys'));
+            } catch (e) {
+                console.warn("[!] CoreShiro: Could not parse settings, using defaults.");
+            }
+            this.settings = { ...this.defaultSettings, ...loadedSettings };
+            this.hotkeys = { ...this.defaultHotkeys, ...loadedHotkeys };
+        }
+
+        saveSettings(key, value) {
+            try {
+                window.localStorage.setItem(key, JSON.stringify(value));
+            } catch (e) {
+                console.error("[-] CoreShiro: Could not save settings.", e);
+            }
+        }
+
+        preloadESPAssets() {
+            this.espCharImg = new Image();
+            this.espCharImg.crossOrigin = 'anonymous';
+            this.espCharImg.onload = () => { this.espCharLoaded = true; if (this.espPreviewCtx) this.renderESPPreview(); };
+            this.espCharImg.src = 'https://cdn.jsdelivr.net/gh/GameSketchers/CoreShiro@main/Assets/character-preview.png';
+            this.espWeaponImg = new Image();
+            this.espWeaponImg.crossOrigin = 'anonymous';
+            this.espWeaponImg.onload = () => { this.espWeaponLoaded = true; if (this.espPreviewCtx) this.renderESPPreview(); };
+            this.espWeaponImg.src = 'https://assets.krunker.io/textures/weapons/icon_1.png';
+        }
+
+        renderESPPreview() {
+            const c = this.espPreviewCanvas; if (!c) return;
+            const ctx = this.espPreviewCtx; if (!ctx) return;
+            const w = c.width, h = c.height;
+            ctx.clearRect(0, 0, w, h);
+            ctx.fillStyle = '#080d15'; ctx.fillRect(0, 0, w, h);
+
+            ctx.strokeStyle = 'rgba(0,210,255,0.04)'; ctx.lineWidth = 1;
+            for (let i = 0; i < w; i += 25) { ctx.beginPath(); ctx.moveTo(i, 0); ctx.lineTo(i, h); ctx.stroke(); }
+            for (let i = 0; i < h; i += 25) { ctx.beginPath(); ctx.moveTo(0, i); ctx.lineTo(w, i); ctx.stroke(); }
+
+            const cx = w / 2;
+            let charTop = 55, charH = 310, charW = 110;
+            if (this.espCharLoaded && this.espCharImg) {
+                const ratio = this.espCharImg.width / this.espCharImg.height;
+                charW = charH * ratio; if (charW > w - 16) { charW = w - 16; charH = charW / ratio; }
+                const charX = cx - charW / 2; charTop = (h - charH) / 2 - 10;
+                ctx.globalAlpha = 0.9; ctx.drawImage(this.espCharImg, charX, charTop, charW, charH); ctx.globalAlpha = 1.0;
+            }
+
+            const boxPad = 10;
+            const bx = cx - charW / 2 - boxPad, by = charTop - boxPad, bw = charW + boxPad * 2, bh = charH + boxPad * 2;
+
+            if (this.settings.espLines) {
+                const hr = (hex, a) => { let r = parseInt(hex.slice(1, 3), 16), g = parseInt(hex.slice(3, 5), 16), b = parseInt(hex.slice(5, 7), 16); return `rgba(${r},${g},${b},${a})`; };
+                const grad = ctx.createLinearGradient(w / 2, h, cx, by + bh);
+                grad.addColorStop(0, hr(this.settings.espColor, 0.9)); grad.addColorStop(1, hr(this.settings.espColor, 0.1));
+                ctx.strokeStyle = grad; ctx.lineWidth = 2.5; ctx.shadowColor = this.settings.espColor; ctx.shadowBlur = 15;
+                ctx.beginPath(); ctx.moveTo(w / 2, h); ctx.lineTo(cx, by + bh); ctx.stroke(); ctx.shadowBlur = 0;
+            }
+
+            if (this.settings.espSquare) {
+                ctx.strokeStyle = this.settings.boxColor; ctx.lineWidth = 2; ctx.shadowColor = this.settings.boxColor; ctx.shadowBlur = 10;
+                ctx.strokeRect(bx, by, bw, bh); ctx.shadowBlur = 0;
+            }
+
+            const hpPct = 0.72; const barX = bx - 9, barW = 5;
+            ctx.fillStyle = 'rgba(0,0,0,0.6)'; ctx.fillRect(barX, by, barW, bh);
+            ctx.fillStyle = '#FDD835'; ctx.fillRect(barX, by + bh * (1 - hpPct), barW, bh * hpPct);
+            ctx.font = 'bold 12px Rajdhani,sans-serif'; ctx.textAlign = 'right'; ctx.fillStyle = '#fff';
+            ctx.shadowColor = '#000'; ctx.shadowBlur = 3; ctx.fillText('♥ 72', barX - 3, by + 13); ctx.shadowBlur = 0;
+
+            if (this.settings.espNameTags) {
+                const nameText = 'Player_01';
+                const wpnText = this.settings.espWeaponIcons ? ' • AK-47' : '';
+                const fullText = nameText + wpnText;
+                ctx.font = 'bold 13px Rajdhani,sans-serif'; ctx.textAlign = 'left';
+                const tw = ctx.measureText(fullText).width;
+                let iconW = 0, iconH = 18;
+                if (this.settings.espWeaponIcons && this.espWeaponLoaded && this.espWeaponImg) {
+                    iconW = this.espWeaponImg.width * (iconH / this.espWeaponImg.height);
+                }
+                const tagW = tw + (iconW > 0 ? iconW + 6 : 0) + 16, tagH = 26;
+                const tagX = cx - tagW / 2, tagY = by - tagH - 8;
+                if (this.settings.espInfoBackground) {
+                    ctx.fillStyle = 'rgba(10,20,30,0.7)'; ctx.strokeStyle = this.settings.boxColor; ctx.lineWidth = 1;
+                    ctx.shadowColor = this.settings.boxColor; ctx.shadowBlur = 8;
+                    ctx.beginPath(); ctx.roundRect(tagX, tagY, tagW, tagH, 4); ctx.fill(); ctx.stroke(); ctx.shadowBlur = 0;
+                }
+                ctx.fillStyle = '#fff'; ctx.textAlign = 'left'; ctx.shadowColor = 'rgba(0,210,255,0.5)'; ctx.shadowBlur = 4;
+                ctx.fillText(fullText, tagX + 8, tagY + 18); ctx.shadowBlur = 0;
+                if (iconW > 0) {
+                    const iconX = tagX + 8 + tw + 6; const iconY = tagY + (tagH - iconH) / 2;
+                    ctx.drawImage(this.espWeaponImg, iconX, iconY, iconW, iconH);
+                }
+            }
+
+            ctx.font = 'bold 12px Rajdhani,sans-serif'; ctx.textAlign = 'center';
+            ctx.fillStyle = '#fff'; ctx.shadowColor = '#000'; ctx.shadowBlur = 3;
+            ctx.fillText('[24m]', cx, by + bh + 18); ctx.shadowBlur = 0;
+        }
+
+        async checkForUpdates() {
+            const current = GM_info.script.version || '0.0.0';
+
+            const getLatestFromGitHub = async () => {
+                try {
+                    const res = await fetch('https://api.github.com/repos/GameSketchers/CoreShiro/releases/latest', { cache: 'no-store' });
+                    if (!res.ok) throw new Error('GitHub latest failed');
+                    const json = await res.json();
+                    const latestTag = (json && (json.tag_name || json.name)) ? (json.tag_name || '').toString().trim() : '';
+                    const assetUrl = (json.assets && json.assets[0] && json.assets[0].browser_download_url) ? json.assets[0].browser_download_url : null;
+                    const version = latestTag.replace(/^v/i, '').trim();
+                    return { version, downloadUrl: assetUrl, source: 'github' };
+                } catch (e) { return null; }
+            };
+
+            const getLatestFromGreasyFork = async () => {
+                try {
+                    const res = await fetch('https://api.greasyfork.org/en/scripts/538607.json', { cache: 'no-store' });
+                    if (!res.ok) throw new Error('GF latest failed');
+                    const json = await res.json();
+                    const version = (json && json.version) ? json.version : null;
+                    const code_url = (json && json.code_url) ? json.code_url : null;
+                    return { version, downloadUrl: code_url, source: 'greasyfork' };
+                } catch (e) { return null; }
+            };
+
+            const latestGh = await getLatestFromGitHub();
+            const latest = latestGh || await getLatestFromGreasyFork();
+            if (!latest || !latest.version) return;
+
+            const cmp = this.compareVersionStrings(current, latest.version);
+            if (cmp < 0) {
+                const url = latest.downloadUrl || 'https://greasyfork.org/en/scripts/538607-coreshiro-krunker-io-utility';
+                this.notify({
+                    title: 'New version available',
+                    message: `Current: ${current} → Latest: ${latest.version}`,
+                    actionText: 'Update',
+                    onAction: () => { try { window.open(url, '_blank', 'noopener'); } catch (e) { location.href = url; } },
+                    timeout: 0
+                });
+            }
+        }
+
+        compareVersionStrings(a, b) {
+            const na = String(a || '').replace(/^v/i, '').split('.').map(x => parseInt(x, 10) || 0);
+            const nb = String(b || '').replace(/^v/i, '').split('.').map(x => parseInt(x, 10) || 0);
+            const len = Math.max(na.length, nb.length);
+            for (let i = 0; i < len; i++) { const da = na[i] || 0, db = nb[i] || 0; if (da > db) return 1; if (da < db) return -1; }
+            return 0;
+        }
+
+        initializeNotifierContainer() {
+            let container = document.getElementById('anonimbiri-notify-wrap');
+            if (!container) { container = document.createElement('div'); container.id = 'anonimbiri-notify-wrap'; document.documentElement.appendChild(container); }
+            this.notifyContainer = container;
+        }
+
+        notify({ title = 'Notification', message = '', actionText, onAction, timeout = 6000 } = {}) {
+            if (!this.notifyContainer) { console.error("[-] CoreShiro: Notifier container not initialized."); return; }
+            const card = document.createElement('div'); card.className = 'anonimbiri-notify-card';
+            setTimeout(() => card.classList.add('visible'), 10);
+            const content = document.createElement('div'); content.className = 'anonimbiri-notify-content';
+            const logo = document.createElement('div'); logo.className = 'anonimbiri-notify-logo';
+            const texts = document.createElement('div'); texts.className = 'anonimbiri-notify-texts';
+            const titleEl = document.createElement('label'); titleEl.className = 'anonimbiri-notify-title'; titleEl.textContent = title;
+            const messageEl = document.createElement('div'); messageEl.className = 'anonimbiri-notify-message'; messageEl.textContent = message;
+            texts.append(titleEl, messageEl); content.append(logo, texts);
+            const controls = document.createElement('div'); controls.className = 'anonimbiri-notify-controls';
+            if (actionText && typeof onAction === 'function') {
+                const btn = document.createElement('div'); btn.className = 'anonimbiri-notify-action-btn'; btn.textContent = actionText;
+                btn.addEventListener('click', (e) => { e.stopPropagation(); onAction(); dismiss(); }); controls.appendChild(btn);
+            }
+            card.append(content, controls); this.notifyContainer.appendChild(card);
+            let hideTimer; if (timeout > 0) hideTimer = setTimeout(dismiss, timeout);
+            function dismiss() { clearTimeout(hideTimer); card.classList.remove('visible'); setTimeout(() => card.remove(), 350); }
+            return { dismiss };
+        }
+
+        initializeLoader() {
+            let tokenPromiseResolve;
+            const tokenPromise = new Promise((resolve) => (tokenPromiseResolve = resolve));
+            const ifr = document.createElement('iframe');
+            ifr.src = location.origin + '/' + (window.location.search ? window.location.search : '');
+            ifr.style.display = 'none';
+            document.documentElement.append(ifr);
+            ifr.contentWindow.fetch=new Proxy(ifr.contentWindow.fetch,{apply(t,a,[u,...r]){if(typeof u==="string"&&u.includes("/seek-game")){ifr.remove();tokenPromiseResolve(u);return;}return Reflect.apply(t,a,[u,...r]);}});
+            window.fetch=new Proxy(window.fetch,{apply:async(t,a,[u,...r])=>{if(typeof u==="string"&&u.includes("/seek-game"))u=await tokenPromise;return Reflect.apply(t,a,[u,...r]);}});
+            function downloadFileSync(url) { var req = new XMLHttpRequest(); req.open('GET', url, false); req.send(); if (req.status === 200) { return req.response; } return null; }
+            const observer = new MutationObserver((mutations) => {
+                for (const mutation of mutations) {
+                    for (const node of mutation.addedNodes) {
+                        if (node.tagName === 'SCRIPT' && node.src && node.src.includes('/static/index-')) {
+                            node.remove(); observer.disconnect();
+                            this.gameJS = downloadFileSync(`https://cdn.jsdelivr.net/gh/GameSketchers/CoreShiro@${GM_info.script.version}/GameSource/game.js`);
+                            const patchedScript = this.patchGameScript(this.gameJS);
+                            this.gameVersion = /let\s+[^\s=]+\s*=\s*['"]([0-9]+\.[0-9]+\.[0-9]+)['"]\s*;\s*let\s+[^\s=]+\s*=\s*[^\s=]+\s*\+\s*['"][^'"]+['"]\s*;\s*let\s+[^\s=]+\s*=\s*process\.env\.CUSTOM_VERSION/s.exec(this.gameJS)[1];
+                            window.addEventListener('load', () => { Function(patchedScript)(); });
+                            return;
+                        }
+                    }
+                }
+            });
+            observer.observe(document, { childList: true, subtree: true });
+        }
+
+        patchGameScript(script) {
+            const entries = {
+                isYou: { regex: /(?:this\.\w+\s*=\s*true;)\s*this\.(\w+)\s*=\s*[^;]+;(?:\s*this\.\w+\s*=\s*[^;]+;){5}\s*this\.\w+\s*=\s*null;/s, index: 1 },
+                pchObjc: { regex: /this\.([^\s=]+)\s*=\s*new\s+[^\s]+\.Object3D\(\)/u, index: 1 },
+                inView: { regex: /([^\s=.]+)\.([^\s=]+)\s*=\s*\([^;]+;\s*if\s*\(\1\.latestData\)/s, index: 2 },
+                procInputs: { regex: /for\s*\(\s*var\s+[^\s=]+\s*=\s*0;\s*[^\s<]+\s*<\s*this\.[^;]+;\s*\+\+[^\s)]+\s*\)\s*{\s*this\.([^\s(]+)\([^)]+\);\s*}\s*this\.[^\s(]+\(\);/s, index: 1 },
+                weaponIndex: { regex: /}\s*else\s*{\s*this\.[^\s=\[]+\[this\.([^\s=\]]+)\]\s*=\s*[^;]+;\s*}\s*[^.\s]+\.updatePlayerAmmo\(this\);/s, index: 1 },
+                fixHowler: { regex: /Howler\.orientation\([^;]+\);/g, patch: "/* Howler Orientation Removed By Anonimbiri */" },
+                respawnT: { regex: /(:\s*)\(parseFloat\([^)]+\)\s*\|\|\s*0\)\s*\*\s*1000/g, patch: `$10` },
+                anticheat1: { regex: /if\s*\(\s*window\.utilities\s*\)\s*\{[\s\S]*?\}/, patch: '/* Anticheat Removed By Anonimbiri */' },
+                commandline: { regex: /Object\.defineProperty\(console,\s*['_"]_commandLineAPI['_"][\s\S]*?}\);?/g, patch: "/* Antidebug removed by anonimbiri */" },
+                writeable:{regex: /writeable:\sfalse,/g, patch: 'writeable: true,'},
+                configurable:{regex: /configurable:\sfalse,/g, patch: 'configurable: true,'},
+                typeError: {regex: /throw new TypeError/g, patch: "console.error"},
+                error: { regex: /throw new Error/g, patch: "console.error" },
+            };
+            for (const name in entries) {
+                const object = entries[name]; const found = object.regex.exec(script);
+                if (object.hasOwnProperty('index')) {
+                    if (!found) { console.warn(`[!] CoreShiro: Failed to Find '${name}'`); this.vars[name] = null; }
+                    else { this.vars[name] = found[object.index]; console.log(`[+] CoreShiro: Found '${name}': ${this.vars[name]}`); }
+                } else if (found) { script = script.replace(object.regex, object.patch); console.log(`[+] CoreShiro: Patched '${name}'`); }
+                else { console.warn(`[!] CoreShiro: Failed to Patch '${name}'`); }
+            }
+            return script;
+        }
+
+        initializeGameHooks() {
+            const cheatInstance = this;
+            const originalSkinsSymbol = Symbol('origSkins');
+            const localSkinsSymbol = Symbol('localSkins');
+
+            Object.defineProperties(Object.prototype, {
+                canvas: {
+                    set(canvasValue) {
+                        this['_canvas'] = canvasValue;
+                        if (canvasValue && canvasValue.id === 'game-overlay') {
+                            cheatInstance.overlay = this; cheatInstance.ctx = canvasValue.getContext('2d');
+                            Object.defineProperty(this, 'render', {
+                                set(originalRender) {
+                                    this['_render'] = new Proxy(originalRender, {
+                                        apply(target, thisArg, args) {
+                                            ['scale', 'game', 'controls', 'renderer', 'me'].forEach((prop, i) => { cheatInstance[prop] = args[i]; });
+                                            Reflect.apply(...arguments);
+                                            if (cheatInstance.me && cheatInstance.ctx) { cheatInstance.onRenderFrame(); }
+                                        },
+                                    });
+                                },
+                                get() { return this['_render']; },
+                            });
+                        }
+                    },
+                    get() { return this['_canvas']; },
+                },
+                THREE: {
+                    configurable: true,
+                    set(value) {
+                        if(cheatInstance.three == null){
+                            console.log("[+] CoreShiro: THREE object captured!");
+                            cheatInstance.three = value;
+                            cheatInstance.tempVector = new value.Vector3();
+                            cheatInstance.cameraPos = new value.Vector3();
+                            cheatInstance.rayC = new value.Raycaster();
+                            cheatInstance.vec2 = new value.Vector2(0, 0);
+                        }
+                        this['_value'] = value;
+                    },
+                    get() { return this['_value']; },
+                },
+                skins: {
+                    set(skinsArray) {
+                        this[originalSkinsSymbol] = skinsArray;
+                        if (!this[localSkinsSymbol]) { this[localSkinsSymbol] = Array.apply(null, Array(25000)).map((_, i) => { return { ind: i, cnt: 1, }}); }
+                        return skinsArray;
+                    },
+                    get() { return cheatInstance.settings.unlockSkins && this.stats ? this[localSkinsSymbol] : this[originalSkinsSymbol]; },
+                },
+                events: {
+                    configurable: true,
+                    set(eventEmitter) {
+                        this['_events'] = eventEmitter;
+                        if (this.ahNum === 0) {
+                            cheatInstance.socket = this; cheatInstance.wsEvent = this._dispatchEvent.bind(this); cheatInstance.wsSend = this.send.bind(this);
+                            this.send = new Proxy(this.send, {
+                                apply(target, thisArg, [type, ...message]) {
+                                    if (type=="ah2") return; let data = message[0];
+                                    if (type === 'en' && data) { cheatInstance.skinCache = { main: data[2][0], secondary: data[2][1], hat: data[3], body: data[4], knife: data[9], dye: data[14], waist: data[17], playerCard: data[32] }; }
+                                    if(cheatInstance.settings.unlockSkins && type === 'spry' && data && data !== 4577){ cheatInstance.skinCache.spray = data; message[0] = 4577; }
+                                    return target.apply(thisArg, [type, ...message]);
+                                }
+                            });
+                            this._dispatchEvent = new Proxy(this._dispatchEvent, {
+                                apply(target, thisArg, [eventName, ...eventData]) {
+                                    if (eventName === 'error' && eventData[0][0].includes('Connection Banned')) {
+                                        localStorage.removeItem('krunker_token');
+                                        cheatInstance.notify({ title: 'Banned', message: 'Due to a ban, you have been signed out.\nPlease connect to the game with a VPN.', timeout: 5000 });
+                                    }
+                                    if (cheatInstance.settings.unlockSkins && eventName === '0') {
+                                        let playerData = eventData[0][0]; let playerStride = 38;
+                                        while (playerData.length % playerStride !== 0) playerStride++;
+                                        for (let i = 0; i < playerData.length; i += playerStride) {
+                                            if (playerData[i] === cheatInstance.socket.socketId || 0) {
+                                                playerData[i + 12] = [cheatInstance.skinCache.main, cheatInstance.skinCache.secondary];
+                                                playerData[i + 13] = cheatInstance.skinCache.hat; playerData[i + 14] = cheatInstance.skinCache.body;
+                                                playerData[i + 19] = cheatInstance.skinCache.knife; playerData[i + 24] = cheatInstance.skinCache.dye;
+                                                playerData[i + 33] = cheatInstance.skinCache.waist; playerData[i + 43] = cheatInstance.skinCache.playerCard;
+                                            }
+                                        }
+                                    }
+                                    if (cheatInstance.settings.unlockSkins && eventName === 'sp') { eventData[0][1] = cheatInstance.skinCache.spray; }
+                                    return target.apply(thisArg, [eventName, ...eventData]);
+                                }
+                            });
+                        }
+                    },
+                    get() { return this['_events']; },
+                },
+                premiumT: { set(value) { return value; }, get() { return cheatInstance.settings.unlockSkins; } },
+                idleTimer: { enumerable: false, get() { return cheatInstance.settings.antikick ? 0 : this['_idleTimer']; }, set(value) { this['_idleTimer'] = value; }, },
+                kickTimer: { enumerable: false, get() { return cheatInstance.settings.antikick ? Infinity : this['_kickTimer']; }, set(value) { this['_kickTimer'] = value; }, },
+                cnBSeen: {
+                    set(value) { this.inView = value; },
+                    get() { const isEnemy = !this.team || (cheatInstance.me && this.team !== cheatInstance.me.team); return isEnemy && (cheatInstance.settings.espSquare || cheatInstance.settings.espNameTags) ? false : this.inView; },
+                },
+                canBSeen: {
+                    set(value) { this.inViewBot = value; },
+                    get() { const isEnemy = !this.team || (cheatInstance.me && this.team !== cheatInstance.me.team); return isEnemy && (cheatInstance.settings.espSquare || cheatInstance.settings.espNameTags) ? false : this.inViewBot; },
+                },
+                thirdPerson: {
+                    set(value) { this['_thirdPerson'] = value; },
+                    get() { return cheatInstance.settings.thirdPersonEnabled ? true : (this['_thirdPerson'] !== undefined ? this['_thirdPerson'] : false); }
+                },
+                trail: {
+                    set(value) { this['_trail'] = value; },
+                    get() { return cheatInstance.settings.alwaysTrail ? true : this['_trail']; }
+                },
+            });
+        }
+
+        onRenderFrame() {
+            if (!this.three || !this.renderer?.camera || !this.me) return;
+            if (this.me.procInputs && !this.me.procInputs[this.isProxy]) {
+                const originalProcInputs = this.me.procInputs;
+                this.me.procInputs = new Proxy(originalProcInputs, {
+                    apply: (target, thisArg, args) => { if (thisArg) { this.onProcessInputs(args[0], thisArg); } return Reflect.apply(target, thisArg, args); },
+                    get: (target, prop) => { if (prop === this.isProxy) return true; return Reflect.get(target, prop); }
+                });
+            }
+
+            if (this.settings.weaponZoom !== 1.0 && this.me.aimVal < 1) {
+                if(this.renderer.camera) this.renderer.camera.zoom = this.settings.weaponZoom;
+            } else if (this.renderer.camera && this.renderer.camera.zoom !== 1.0) {
+                this.renderer.camera.zoom = 1.0;
+            }
+
+            if (this.lastWireframeState !== this.settings.wireframeEnabled) {
+                this.lastWireframeState = this.settings.wireframeEnabled;
+                if (this.renderer.scene) {
+                    this.renderer.scene.traverse(child => {
+                        if (child.material && child.type == 'Mesh' && child.name != '' && child.isObject3D && !child.isModel && child.isMesh){
+                            if (Array.isArray(child.material)) { for (const material of child.material) material.wireframe = this.settings.wireframeEnabled; }
+                            else child.material.wireframe = this.settings.wireframeEnabled;
+                        }
+                    });
+                }
+            }
+
+            const original_strokeStyle = this.ctx.strokeStyle; const original_lineWidth = this.ctx.lineWidth;
+            const original_font = this.ctx.font; const original_fillStyle = this.ctx.fillStyle;
+            CRC2d.save.apply(this.ctx, []);
+            if (this.settings.fovSize > 0 && this.settings.drawFovCircle) {
+                const centerX = this.overlay.canvas_
