@@ -1,0 +1,1431 @@
+// ==UserScript==
+// @name             Krunker Clean Aimbot + ESP (iPad Friendly)
+// @namespace        local
+// @version          1.1-clean
+// @description      Neutral Krunker cheat with floating menu button for iPad / touch devices. Aimbot + ESP.
+// @author           cleaned
+// @match            *://krunker.io/*
+// @match            *://*.browserfps.com/*
+// @exclude          *://krunker.io/social*
+// @exclude          *://krunker.io/editor*
+// @exclude          *://krunker.io/viewer*
+// @grant            none
+// @run-at           document-start
+// @license          MIT
+// ==/UserScript==
+
+(function(uniqueId, CRC2d) {
+
+    class KrunkerClean {
+        constructor() {
+            console.log("Krunker Clean: Initializing (iPad friendly)...");
+
+            this.GUI = {};
+            this.game = null;
+            this.me = null;
+            this.renderer = null;
+            this.controls = null;
+            this.overlay = null;
+            this.ctx = null;
+            this.socket = null;
+            this.skinCache = {};
+            this.playerMaps = [];
+            this.scale = 1;
+            this.three = null;
+            this.vars = {};
+            this.exports = null;
+            this.gameVersion = '';
+            this.gameJS = '';
+            this.weaponIconCache = {};
+            this.notifyContainer = null;
+            this.legitTarget = null;
+            this.lastTargetChangeTime = 0;
+            this.aimOffset = { x: 0, y: 0 };
+
+            this.lastWireframeState = null;
+
+            this.PLAYER_HEIGHT = 11;
+            this.PLAYER_WIDTH = 4;
+            this.CROUCH_FACTOR = 3;
+            this.BOT_CROUCH_FACTOR = 2;
+            this.CAMERA_HEIGHT = 1.5;
+
+            this.tempVector = null;
+            this.cameraPos = null;
+
+            this.isProxy = Symbol('isProxy');
+            this.rightMouseDown = false;
+            this.isBindingHotkey = false;
+            this.currentBindingSetting = null;
+            this.pressedKeys = new Set();
+
+            this.espPreviewCanvas = null;
+            this.espPreviewCtx = null;
+
+            this.defaultSettings = {
+                aimbotEnabled: true,
+                aimbotOnRightMouse: false,
+                aimbotWallCheck: true,
+                aimbotWallBangs: false,
+                aimbotTeamCheck: true,
+                aimbotBotCheck: true,
+                superSilentEnabled: false,
+                autoFireEnabled: false,
+                fovSize: 90,
+                aimOffset: 0,
+                drawFovCircle: true,
+                espLines: true,
+                espSquare: true,
+                espNameTags: true,
+                espWeaponIcons: true,
+                espInfoBackground: true,
+                espTeamCheck: true,
+                espBotCheck: true,
+                wireframeEnabled: false,
+                unlockSkins: false,          // disabled by default (risky)
+                bhopEnabled: false,
+                antiAimEnabled: false,
+                espColor: "#00e5ff",
+                boxColor: "#00e5ff",
+                botColor: "#00ff88",
+                autoNuke: false,
+                antikick: false,             // disabled by default (risky)
+                autoReload: true,
+                legitAimbot: true,
+                flickSpeed: 25,
+                adsTremorReduction: 50,
+                aimRandomness: 1.5,
+                aimTremor: 0.2,
+                thirdPersonEnabled: false,
+                alwaysTrail: false,
+                weaponZoom: 1.0,
+            };
+            this.defaultHotkeys = {
+                toggleMenu: 'F1',
+                aimbotEnabled: 'F2',
+                espSquare: 'F3',
+                bhopEnabled: 'F4',
+                autoFireEnabled: 'F5',
+                superSilentEnabled: 'F6',
+                antiAimEnabled: 'F7',
+                wireframeEnabled: 'F8',
+                unlockSkins: 'F9',
+                aimbotTeamCheck: 'Numpad1',
+                espTeamCheck: 'Numpad2',
+                aimbotBotCheck: 'Numpad3',
+                espBotCheck: 'Numpad4',
+                aimbotWallCheck: 'Numpad5',
+                aimbotWallBangs: 'Numpad6',
+                espLines: 'Numpad7',
+                espNameTags: 'Numpad8',
+                espWeaponIcons: 'Numpad9',
+            };
+            this.settings = {};
+            this.hotkeys = {};
+
+            try {
+                this.loadSettings();
+                this.initializeNotifierContainer();
+                this.initializeLoader();
+                this.initializeGameHooks();
+                this.waitFor(() => window.windows).then(() => {
+                    this.initGameGUI();
+                    this.createFloatingToggleButton();   // <-- iPad friendly button
+                });
+                this.addEventListeners();
+                console.log("Krunker Clean: Successfully Initialized!");
+            } catch (error) {
+                console.error('Krunker Clean: FATAL ERROR during initialization.', error);
+            }
+        }
+
+        loadSettings() {
+            let loadedSettings = {}, loadedHotkeys = {};
+            try {
+                loadedSettings = JSON.parse(window.localStorage.getItem('krunkerclean_settings'));
+                loadedHotkeys = JSON.parse(window.localStorage.getItem('krunkerclean_hotkeys'));
+            } catch (e) {
+                console.warn("Krunker Clean: Could not parse settings, using defaults.");
+            }
+            this.settings = { ...this.defaultSettings, ...loadedSettings };
+            this.hotkeys = { ...this.defaultHotkeys, ...loadedHotkeys };
+        }
+
+        saveSettings(key, value) {
+            try {
+                window.localStorage.setItem(key, JSON.stringify(value));
+            } catch (e) {
+                console.error("Krunker Clean: Could not save settings.", e);
+            }
+        }
+
+        // ==================== FLOATING TOGGLE BUTTON (iPad / Touch) ====================
+        createFloatingToggleButton() {
+            // Remove existing if any
+            const old = document.getElementById('krunker-clean-float-btn');
+            if (old) old.remove();
+
+            const btn = document.createElement('div');
+            btn.id = 'krunker-clean-float-btn';
+            btn.innerHTML = 'â°';
+            btn.title = 'Open / Close Menu';
+
+            Object.assign(btn.style, {
+                position: 'fixed',
+                bottom: '20px',
+                right: '20px',
+                width: '56px',
+                height: '56px',
+                borderRadius: '50%',
+                background: 'rgba(0, 30, 40, 0.92)',
+                border: '2px solid #00e5ff',
+                color: '#00e5ff',
+                fontSize: '28px',
+                fontWeight: 'bold',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                zIndex: '99999',
+                cursor: 'pointer',
+                boxShadow: '0 4px 20px rgba(0, 229, 255, 0.35)',
+                userSelect: 'none',
+                WebkitUserSelect: 'none',
+                WebkitTapHighlightColor: 'transparent',
+                transition: 'transform 0.15s ease, background 0.15s ease',
+                touchAction: 'manipulation'
+            });
+
+            // Touch / click support
+            const toggleMenu = (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                this.showGUI();
+            };
+
+            btn.addEventListener('click', toggleMenu);
+            btn.addEventListener('touchend', toggleMenu, { passive: false });
+
+            // Visual feedback
+            btn.addEventListener('touchstart', () => {
+                btn.style.transform = 'scale(0.92)';
+                btn.style.background = 'rgba(0, 60, 70, 0.95)';
+            });
+            btn.addEventListener('touchend', () => {
+                btn.style.transform = 'scale(1)';
+                btn.style.background = 'rgba(0, 30, 40, 0.92)';
+            });
+
+            document.documentElement.appendChild(btn);
+        }
+
+        initializeNotifierContainer() {
+            let container = document.getElementById('krunker-clean-notify-wrap');
+            if (!container) {
+                container = document.createElement('div');
+                container.id = 'krunker-clean-notify-wrap';
+                document.documentElement.appendChild(container);
+            }
+            this.notifyContainer = container;
+        }
+
+        notify({ title = 'Notification', message = '', actionText, onAction, timeout = 6000 } = {}) {
+            if (!this.notifyContainer) return;
+            const card = document.createElement('div');
+            card.className = 'krunker-clean-notify-card';
+            setTimeout(() => card.classList.add('visible'), 10);
+
+            const content = document.createElement('div');
+            content.className = 'krunker-clean-notify-content';
+
+            const texts = document.createElement('div');
+            texts.className = 'krunker-clean-notify-texts';
+            const titleEl = document.createElement('label');
+            titleEl.className = 'krunker-clean-notify-title';
+            titleEl.textContent = title;
+            const messageEl = document.createElement('div');
+            messageEl.className = 'krunker-clean-notify-message';
+            messageEl.textContent = message;
+            texts.append(titleEl, messageEl);
+            content.append(texts);
+
+            const controls = document.createElement('div');
+            controls.className = 'krunker-clean-notify-controls';
+            if (actionText && typeof onAction === 'function') {
+                const btn = document.createElement('div');
+                btn.className = 'krunker-clean-notify-action-btn';
+                btn.textContent = actionText;
+                btn.addEventListener('click', (e) => { e.stopPropagation(); onAction(); dismiss(); });
+                controls.appendChild(btn);
+            }
+            card.append(content, controls);
+            this.notifyContainer.appendChild(card);
+
+            let hideTimer;
+            if (timeout > 0) hideTimer = setTimeout(dismiss, timeout);
+
+            function dismiss() {
+                clearTimeout(hideTimer);
+                card.classList.remove('visible');
+                setTimeout(() => card.remove(), 350);
+            }
+            return { dismiss };
+        }
+
+        initializeLoader() {
+            let tokenPromiseResolve;
+            const tokenPromise = new Promise((resolve) => (tokenPromiseResolve = resolve));
+            const ifr = document.createElement('iframe');
+            ifr.src = location.origin + '/' + (window.location.search ? window.location.search : '');
+            ifr.style.display = 'none';
+            document.documentElement.append(ifr);
+            ifr.contentWindow.fetch = new Proxy(ifr.contentWindow.fetch, {
+                apply(t, a, [u, ...r]) {
+                    if (typeof u === "string" && u.includes("/seek-game")) {
+                        ifr.remove();
+                        tokenPromiseResolve(u);
+                        return;
+                    }
+                    return Reflect.apply(t, a, [u, ...r]);
+                }
+            });
+            window.fetch = new Proxy(window.fetch, {
+                apply: async (t, a, [u, ...r]) => {
+                    if (typeof u === "string" && u.includes("/seek-game")) u = await tokenPromise;
+                    return Reflect.apply(t, a, [u, ...r]);
+                }
+            });
+
+            function downloadFileSync(url) {
+                var req = new XMLHttpRequest();
+                req.open('GET', url, false);
+                req.send();
+                if (req.status === 200) return req.response;
+                return null;
+            }
+
+            const observer = new MutationObserver((mutations) => {
+                for (const mutation of mutations) {
+                    for (const node of mutation.addedNodes) {
+                        if (node.tagName === 'SCRIPT' && node.src && node.src.includes('/static/index-')) {
+                            node.remove();
+                            observer.disconnect();
+                            // Note: game.js patching may break after updates. Use at own risk.
+                            try {
+                                this.gameJS = downloadFileSync(`https://cdn.jsdelivr.net/gh/GameSketchers/AimbaeShiro@1.6.7/GameSource/game.js`);
+                                if (this.gameJS) {
+                                    const patchedScript = this.patchGameScript(this.gameJS);
+                                    this.gameVersion = /let\s+[^\s=]+\s*=\s*['"]([0-9]+\.[0-9]+\.[0-9]+)['"]\s*;\s*let\s+[^\s=]+\s*=\s*[^\s=]+\s*\+\s*['"][^'"]+['"]\s*;\s*let\s+[^\s=]+\s*=\s*process\.env\.CUSTOM_VERSION/s.exec(this.gameJS)?.[1] || '';
+                                    window.addEventListener('load', () => { Function(patchedScript)(); });
+                                }
+                            } catch (e) {
+                                console.warn("Krunker Clean: Could not load/patch game source", e);
+                            }
+                            return;
+                        }
+                    }
+                }
+            });
+            observer.observe(document, { childList: true, subtree: true });
+        }
+
+        patchGameScript(script) {
+            const entries = {
+                isYou: { regex: /(?:this\.\w+\s*=\s*true;)\s*this\.(\w+)\s*=\s*[^;]+;(?:\s*this\.\w+\s*=\s*[^;]+;){5}\s*this\.\w+\s*=\s*null;/s, index: 1 },
+                pchObjc: { regex: /this\.([^\s=]+)\s*=\s*new\s+[^\s]+\.Object3D\(\)/u, index: 1 },
+                inView: { regex: /([^\s=.]+)\.([^\s=]+)\s*=\s*\([^;]+;\s*if\s*\(\1\.latestData\)/s, index: 2 },
+                procInputs: { regex: /for\s*\(\s*var\s+[^\s=]+\s*=\s*0;\s*[^\s<]+\s*<\s*this\.[^;]+;\s*\+\+[^\s)]+\s*\)\s*{\s*this\.([^\s(]+)\([^)]+\);\s*}\s*this\.[^\s(]+\(\);/s, index: 1 },
+                weaponIndex: { regex: /}\s*else\s*{\s*this\.[^\s=\[]+\[this\.([^\s=\]]+)\]\s*=\s*[^;]+;\s*}\s*[^.\s]+\.updatePlayerAmmo\(this\);/s, index: 1 },
+                fixHowler: { regex: /Howler\.orientation\([^;]+\);/g, patch: "/* Howler Orientation Removed */" },
+                respawnT: { regex: /(:\s*)\(parseFloat\([^)]+\)\s*\|\|\s*0\)\s*\*\s*1000/g, patch: `$10` },
+                anticheat1: { regex: /if\s*\(\s*window\.utilities\s*\)\s*\{[\s\S]*?\}/, patch: '/* Anticheat Removed */' },
+                commandline: { regex: /Object\.defineProperty\(console,\s*['_"]_commandLineAPI['_"][\s\S]*?}\);?/g, patch: "/* Antidebug removed */" },
+                writeable: { regex: /writeable:\sfalse,/g, patch: 'writeable: true,' },
+                configurable: { regex: /configurable:\sfalse,/g, patch: 'configurable: true,' },
+                typeError: { regex: /throw new TypeError/g, patch: "console.error" },
+                error: { regex: /throw new Error/g, patch: "console.error" },
+            };
+            for (const name in entries) {
+                const object = entries[name];
+                const found = object.regex.exec(script);
+                if (object.hasOwnProperty('index')) {
+                    if (!found) {
+                        console.warn(`Krunker Clean: Failed to Find '${name}'`);
+                        this.vars[name] = null;
+                    } else {
+                        this.vars[name] = found[object.index];
+                        console.log(`Krunker Clean: Found '${name}': ${this.vars[name]}`);
+                    }
+                } else if (found) {
+                    script = script.replace(object.regex, object.patch);
+                    console.log(`Krunker Clean: Patched '${name}'`);
+                } else {
+                    console.warn(`Krunker Clean: Failed to Patch '${name}'`);
+                }
+            }
+            return script;
+        }
+
+        initializeGameHooks() {
+            const cheatInstance = this;
+            const originalSkinsSymbol = Symbol('origSkins');
+            const localSkinsSymbol = Symbol('localSkins');
+
+            Object.defineProperties(Object.prototype, {
+                canvas: {
+                    set(canvasValue) {
+                        this['_canvas'] = canvasValue;
+                        if (canvasValue && canvasValue.id === 'game-overlay') {
+                            cheatInstance.overlay = this;
+                            cheatInstance.ctx = canvasValue.getContext('2d');
+                            Object.defineProperty(this, 'render', {
+                                set(originalRender) {
+                                    this['_render'] = new Proxy(originalRender, {
+                                        apply(target, thisArg, args) {
+                                            ['scale', 'game', 'controls', 'renderer', 'me'].forEach((prop, i) => {
+                                                cheatInstance[prop] = args[i];
+                                            });
+                                            Reflect.apply(...arguments);
+                                            if (cheatInstance.me && cheatInstance.ctx) {
+                                                cheatInstance.onRenderFrame();
+                                            }
+                                        },
+                                    });
+                                },
+                                get() { return this['_render']; },
+                            });
+                        }
+                    },
+                    get() { return this['_canvas']; },
+                },
+                THREE: {
+                    configurable: true,
+                    set(value) {
+                        if (cheatInstance.three == null) {
+                            console.log("Krunker Clean: THREE object captured!");
+                            cheatInstance.three = value;
+                            cheatInstance.tempVector = new value.Vector3();
+                            cheatInstance.cameraPos = new value.Vector3();
+                            cheatInstance.rayC = new value.Raycaster();
+                            cheatInstance.vec2 = new value.Vector2(0, 0);
+                        }
+                        this['_value'] = value;
+                    },
+                    get() { return this['_value']; },
+                },
+                skins: {
+                    set(skinsArray) {
+                        this[originalSkinsSymbol] = skinsArray;
+                        if (!this[localSkinsSymbol]) {
+                            this[localSkinsSymbol] = Array.apply(null, Array(25000)).map((_, i) => ({ ind: i, cnt: 1 }));
+                        }
+                        return skinsArray;
+                    },
+                    get() {
+                        return cheatInstance.settings.unlockSkins && this.stats ? this[localSkinsSymbol] : this[originalSkinsSymbol];
+                    },
+                },
+                events: {
+                    configurable: true,
+                    set(eventEmitter) {
+                        this['_events'] = eventEmitter;
+                        if (this.ahNum === 0) {
+                            cheatInstance.socket = this;
+                            cheatInstance.wsEvent = this._dispatchEvent.bind(this);
+                            cheatInstance.wsSend = this.send.bind(this);
+                            this.send = new Proxy(this.send, {
+                                apply(target, thisArg, [type, ...message]) {
+                                    if (type == "ah2") return;
+                                    let data = message[0];
+                                    if (type === 'en' && data) {
+                                        cheatInstance.skinCache = {
+                                            main: data[2][0], secondary: data[2][1], hat: data[3], body: data[4],
+                                            knife: data[9], dye: data[14], waist: data[17], playerCard: data[32]
+                                        };
+                                    }
+                                    if (cheatInstance.settings.unlockSkins && type === 'spry' && data && data !== 4577) {
+                                        cheatInstance.skinCache.spray = data;
+                                        message[0] = 4577;
+                                    }
+                                    return target.apply(thisArg, [type, ...message]);
+                                }
+                            });
+                            this._dispatchEvent = new Proxy(this._dispatchEvent, {
+                                apply(target, thisArg, [eventName, ...eventData]) {
+                                    if (eventName === 'error' && eventData[0][0].includes('Connection Banned')) {
+                                        localStorage.removeItem('krunker_token');
+                                        cheatInstance.notify({
+                                            title: 'Banned',
+                                            message: 'Due to a ban, you have been signed out.\nPlease connect to the game with a VPN.',
+                                            timeout: 5000
+                                        });
+                                    }
+                                    if (cheatInstance.settings.unlockSkins && eventName === '0') {
+                                        let playerData = eventData[0][0];
+                                        let playerStride = 38;
+                                        while (playerData.length % playerStride !== 0) playerStride++;
+                                        for (let i = 0; i < playerData.length; i += playerStride) {
+                                            if (playerData[i] === cheatInstance.socket.socketId || 0) {
+                                                playerData[i + 12] = [cheatInstance.skinCache.main, cheatInstance.skinCache.secondary];
+                                                playerData[i + 13] = cheatInstance.skinCache.hat;
+                                                playerData[i + 14] = cheatInstance.skinCache.body;
+                                                playerData[i + 19] = cheatInstance.skinCache.knife;
+                                                playerData[i + 24] = cheatInstance.skinCache.dye;
+                                                playerData[i + 33] = cheatInstance.skinCache.waist;
+                                                playerData[i + 43] = cheatInstance.skinCache.playerCard;
+                                            }
+                                        }
+                                    }
+                                    if (cheatInstance.settings.unlockSkins && eventName === 'sp') {
+                                        eventData[0][1] = cheatInstance.skinCache.spray;
+                                    }
+                                    return target.apply(thisArg, [eventName, ...eventData]);
+                                }
+                            });
+                        }
+                    },
+                    get() { return this['_events']; },
+                },
+                premiumT: {
+                    set(value) { return value; },
+                    get() { return cheatInstance.settings.unlockSkins; }
+                },
+                idleTimer: {
+                    enumerable: false,
+                    get() { return cheatInstance.settings.antikick ? 0 : this['_idleTimer']; },
+                    set(value) { this['_idleTimer'] = value; },
+                },
+                kickTimer: {
+                    enumerable: false,
+                    get() { return cheatInstance.settings.antikick ? Infinity : this['_kickTimer']; },
+                    set(value) { this['_kickTimer'] = value; },
+                },
+                cnBSeen: {
+                    set(value) { this.inView = value; },
+                    get() {
+                        const isEnemy = !this.team || (cheatInstance.me && this.team !== cheatInstance.me.team);
+                        return isEnemy && (cheatInstance.settings.espSquare || cheatInstance.settings.espNameTags) ? false : this.inView;
+                    },
+                },
+                canBSeen: {
+                    set(value) { this.inViewBot = value; },
+                    get() {
+                        const isEnemy = !this.team || (cheatInstance.me && this.team !== cheatInstance.me.team);
+                        return isEnemy && (cheatInstance.settings.espSquare || cheatInstance.settings.espNameTags) ? false : this.inViewBot;
+                    },
+                },
+                thirdPerson: {
+                    set(value) { this['_thirdPerson'] = value; },
+                    get() {
+                        return cheatInstance.settings.thirdPersonEnabled ? true :
+                            (this['_thirdPerson'] !== undefined ? this['_thirdPerson'] : false);
+                    }
+                },
+                trail: {
+                    set(value) { this['_trail'] = value; },
+                    get() { return cheatInstance.settings.alwaysTrail ? true : this['_trail']; }
+                },
+            });
+        }
+
+        onRenderFrame() {
+            if (!this.three || !this.renderer?.camera || !this.me) return;
+
+            if (this.me.procInputs && !this.me.procInputs[this.isProxy]) {
+                const originalProcInputs = this.me.procInputs;
+                this.me.procInputs = new Proxy(originalProcInputs, {
+                    apply: (target, thisArg, args) => {
+                        if (thisArg) this.onProcessInputs(args[0], thisArg);
+                        return Reflect.apply(target, thisArg, args);
+                    },
+                    get: (target, prop) => {
+                        if (prop === this.isProxy) return true;
+                        return Reflect.get(target, prop);
+                    }
+                });
+            }
+
+            if (this.settings.weaponZoom !== 1.0 && this.me.aimVal < 1) {
+                if (this.renderer.camera) this.renderer.camera.zoom = this.settings.weaponZoom;
+            } else if (this.renderer.camera && this.renderer.camera.zoom !== 1.0) {
+                this.renderer.camera.zoom = 1.0;
+            }
+
+            if (this.lastWireframeState !== this.settings.wireframeEnabled) {
+                this.lastWireframeState = this.settings.wireframeEnabled;
+                if (this.renderer.scene) {
+                    this.renderer.scene.traverse(child => {
+                        if (child.material && child.type == 'Mesh' && child.name != '' && child.isObject3D && !child.isModel && child.isMesh) {
+                            if (Array.isArray(child.material)) {
+                                for (const material of child.material) material.wireframe = this.settings.wireframeEnabled;
+                            } else {
+                                child.material.wireframe = this.settings.wireframeEnabled;
+                            }
+                        }
+                    });
+                }
+            }
+
+            const original_strokeStyle = this.ctx.strokeStyle;
+            const original_lineWidth = this.ctx.lineWidth;
+            const original_font = this.ctx.font;
+            const original_fillStyle = this.ctx.fillStyle;
+            CRC2d.save.apply(this.ctx, []);
+
+            if (this.settings.fovSize > 0 && this.settings.drawFovCircle) {
+                const centerX = this.overlay.canvas.width / 2;
+                const centerY = this.overlay.canvas.height / 2;
+                this.ctx.beginPath();
+                this.ctx.arc(centerX, centerY, this.settings.fovSize, 0, 2 * Math.PI, false);
+                this.ctx.lineWidth = 2;
+                this.ctx.strokeStyle = 'rgba(0, 229, 255, 0.7)';
+                this.ctx.shadowColor = 'rgba(0, 229, 255, 1)';
+                this.ctx.shadowBlur = 10;
+                this.ctx.stroke();
+                this.ctx.shadowBlur = 0;
+            }
+
+            for (const player of this.game.players.list) {
+                if (player.isYou || !player.active || !player.objInstances) continue;
+                this.drawCanvasESP(player, false);
+            }
+            if (this.settings.espBotCheck) {
+                for (const bot of this.game.AI.ais) {
+                    if (!bot.mesh || !bot.mesh.visible || bot.health <= 0) continue;
+                    this.drawCanvasESP(bot, true);
+                }
+            }
+
+            CRC2d.restore.apply(this.ctx, []);
+            this.ctx.strokeStyle = original_strokeStyle;
+            this.ctx.lineWidth = original_lineWidth;
+            this.ctx.font = original_font;
+            this.ctx.fillStyle = original_fillStyle;
+        }
+
+        onProcessInputs(inputPacket, player) {
+            const gameInputIndices = {
+                frame: 0, delta: 1, xdir: 2, ydir: 3, moveDir: 4, shoot: 5,
+                scope: 6, jump: 7, reload: 8, crouch: 9, weaponScroll: 10,
+                weaponSwap: 11, moveLock: 12
+            };
+
+            if (this.settings.bhopEnabled && this.pressedKeys.has('Space')) {
+                this.controls.keys[this.controls.binds.jump.val] ^= 1;
+                if (this.controls.keys[this.controls.binds.jump.val]) {
+                    this.controls.didPressed[this.controls.binds.jump.val] = 1;
+                }
+                if (this.me.velocity.y < -0.03 && this.me.canSlide) {
+                    setTimeout(() => {
+                        this.controls.keys[this.controls.binds.crouch.val] = 0;
+                    }, this.me.slideTimer || 325);
+                    this.controls.keys[this.controls.binds.crouch.val] = 1;
+                    this.controls.didPressed[this.controls.binds.crouch.val] = 1;
+                }
+            }
+
+            if (this.settings.autoNuke && Object.keys(this.me.streaks).length && this.socket?.send) {
+                this.socket.send('k', 0);
+            }
+
+            if (this.settings.autoReload && this.me.weapon.secondary !== undefined &&
+                this.me.weapon.secondary !== null &&
+                this.me.ammos[this.me[this.vars.weaponIndex]] === 0 &&
+                this.me.reloadTimer === 0) {
+                this.game.players.reload(this.me);
+                inputPacket[gameInputIndices.reload] = 1;
+            }
+
+            let target = null;
+            if (this.settings.aimbotEnabled && (!this.settings.aimbotOnRightMouse || this.rightMouseDown)) {
+                let potentialTargets = [];
+
+                for (let i = 0; i < this.game.players.list.length; i++) {
+                    const p = this.game.players.list[i];
+                    if (this.isDefined(p) && !p.isYou && p.active && p.health > 0 &&
+                        (!this.settings.aimbotTeamCheck || !this.isTeam(p)) &&
+                        (!this.settings.aimbotWallCheck || this.getCanSee(p))) {
+                        p.isBot = false;
+                        potentialTargets.push(p);
+                    }
+                }
+
+                if (this.settings.aimbotBotCheck && this.game.AI?.ais) {
+                    for (let i = 0; i < this.game.AI.ais.length; i++) {
+                        const bot = this.game.AI.ais[i];
+                        if (bot.mesh && bot.mesh.visible && bot.health > 0 &&
+                            (!this.settings.aimbotWallCheck || this.getCanSee(bot))) {
+                            bot.isBot = true;
+                            potentialTargets.push(bot);
+                        }
+                    }
+                }
+
+                potentialTargets.sort((a, b) => this.getDistanceSq(this.me, a) - this.getDistanceSq(this.me, b));
+
+                if (this.settings.fovSize > 0) {
+                    const fovRadiusSq = this.settings.fovSize * this.settings.fovSize;
+                    const centerX = this.overlay.canvas.width / 2;
+                    const centerY = this.overlay.canvas.height / 2;
+
+                    potentialTargets = potentialTargets.filter(p => {
+                        const screenPos = this.world2Screen({ x: p.x, y: p.y, z: p.z });
+                        if (!screenPos) return false;
+                        const distSq = (screenPos.x - centerX) ** 2 + (screenPos.y - centerY) ** 2;
+                        return distSq <= fovRadiusSq;
+                    });
+                }
+                target = potentialTargets[0] || null;
+            }
+
+            if (target && this.me.reloadTimer === 0 && this.game.gameState !== 4 && this.game.gameState !== 5) {
+                const isMelee = this.me.weapon.melee;
+                const closeRange = 17.6;
+                const throwRange = 65.2;
+                const distance = Math.sqrt(this.getDistanceSq(this.me, target));
+
+                if (isMelee && distance > (this.me.weapon.canThrow ? throwRange : closeRange)) {
+                    // skip
+                } else {
+                    const targetY = target.isBot ?
+                        (target.y - target.dat.mSize / 2) :
+                        (target.y - target.crouchVal * 3 + this.me.crouchVal * 3 + this.settings.aimOffset);
+                    const yDire = this.getDirection(this.me.z, this.me.x, target.z, target.x);
+                    const xDire = this.getXDirection(this.me.x, this.me.y, this.me.z, target.x, targetY, target.z) - (0.3 * this.me.recoilAnimY);
+
+                    if (this.settings.legitAimbot) {
+                        let adsReduction = 1.0;
+                        if (this.me.aimVal < 1) {
+                            adsReduction = 1.0 - (this.settings.adsTremorReduction / 100.0);
+                        }
+
+                        if (this.legitTarget !== target) {
+                            this.legitTarget = target;
+                            this.lastTargetChangeTime = Date.now();
+                            this.aimOffset.x = (Math.random() - 0.5) * (this.settings.aimRandomness * adsReduction);
+                            this.aimOffset.y = (Math.random() - 0.5) * (this.settings.aimRandomness * adsReduction);
+                        }
+
+                        const wanderAmount = this.settings.aimRandomness * adsReduction;
+                        this.aimOffset.x += (Math.random() - 0.5) * wanderAmount * 0.1;
+                        this.aimOffset.y += (Math.random() - 0.5) * wanderAmount * 0.1;
+                        this.aimOffset.x = Math.max(-wanderAmount, Math.min(wanderAmount, this.aimOffset.x));
+                        this.aimOffset.y = Math.max(-wanderAmount, Math.min(wanderAmount, this.aimOffset.y));
+
+                        const currentY = this.controls.object.rotation.y;
+                        const currentX = this.controls[this.vars.pchObjc].rotation.x;
+
+                        const finalX = xDire + this.aimOffset.y * 0.01;
+                        const finalY = yDire + this.aimOffset.x * 0.01;
+
+                        const flickFactor = this.settings.flickSpeed * 0.01;
+
+                        const shortestAngleY = Math.atan2(Math.sin(finalY - currentY), Math.cos(finalY - currentY));
+                        let newY = currentY + shortestAngleY * flickFactor;
+
+                        const shortestAngleX = finalX - currentX;
+                        let newX = currentX + shortestAngleX * flickFactor;
+
+                        if (this.settings.aimTremor > 0) {
+                            const tremorAmount = this.settings.aimTremor * adsReduction;
+                            newX += (Math.random() - 0.5) * tremorAmount * 0.01;
+                            newY += (Math.random() - 0.5) * tremorAmount * 0.01;
+                        }
+
+                        if (!this.settings.superSilentEnabled) this.lookDir(newX, newY);
+                        inputPacket[gameInputIndices.xdir] = newX * 1000;
+                        inputPacket[gameInputIndices.ydir] = newY * 1000;
+                    } else {
+                        if (!this.settings.superSilentEnabled) this.lookDir(xDire, yDire);
+                        inputPacket[gameInputIndices.xdir] = xDire * 1000;
+                        inputPacket[gameInputIndices.ydir] = yDire * 1000;
+                    }
+
+                    if (this.settings.autoFireEnabled) {
+                        this.playerMaps.length = 0;
+                        this.rayC.setFromCamera(this.vec2, this.renderer.fpsCamera);
+                        this.playerMaps = this.game.players.list.map(p => p.objInstances).filter(Boolean);
+                        let inCast = this.rayC.intersectObjects(this.playerMaps, true).length;
+                        let canSee = target.objInstances && this.containsPoint(target.objInstances.position);
+
+                        if (isMelee) {
+                            if (distance <= closeRange && this.me.reloadTimer === 0 && !this.me.didShoot &&
+                                this.me.aimVal === 0 && (!this.settings.legitAimbot || (inCast && canSee))) {
+                                inputPacket[gameInputIndices.shoot] = 1;
+                            } else if (distance <= throwRange && this.me.weapon.canThrow) {
+                                inputPacket[gameInputIndices.scope] = 1;
+                                if (this.me.aimVal === 0 && this.me.reloadTimer === 0 && !this.me.didShoot &&
+                                    (!this.settings.legitAimbot || (inCast && canSee))) {
+                                    inputPacket[gameInputIndices.shoot] = 1;
+                                }
+                            }
+                        } else {
+                            if (!this.me.weapon.noAim) inputPacket[gameInputIndices.scope] = 1;
+                            if ((this.me.weapon.noAim || this.me.aimVal === 0) && this.me.reloadTimer === 0 &&
+                                !this.me.didShoot && (!this.settings.legitAimbot || (inCast && canSee))) {
+                                inputPacket[gameInputIndices.shoot] = 1;
+                            }
+                        }
+                    }
+                }
+            } else if (!target && this.game.gameState !== 4 && this.game.gameState !== 5) {
+                this.legitTarget = null;
+                if (!this.settings.superSilentEnabled && !this.settings.antiAimEnabled) {
+                    this.resetLookAt();
+                }
+                if (this.settings.antiAimEnabled && !this.me.didShoot && this.me.aimVal !== 0) {
+                    inputPacket[gameInputIndices.xdir] = -Math.PI * 500;
+                }
+            } else if (this.me.weapon.nAuto && this.me.didShoot) {
+                inputPacket[gameInputIndices.shoot] = 0;
+                inputPacket[gameInputIndices.scope] = 0;
+                this.me.inspecting = false;
+                this.me.inspectX = 0;
+            }
+        }
+
+        showGUI() {
+            if (this.game && !this.game.gameClosed) {
+                if (document.pointerLockElement || document.mozPointerLockElement) {
+                    document.exitPointerLock();
+                }
+            }
+            window.showWindow(this.GUI.windowIndex);
+        }
+
+        initGameGUI() {
+            const fontLink = document.createElement('link');
+            fontLink.href = 'https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap';
+            fontLink.rel = 'stylesheet';
+            document.head.appendChild(fontLink);
+
+            const menuCSS = `
+.krunker-clean-menu-container {
+    font-family: 'Inter', 'Segoe UI', sans-serif !important;
+    background: rgba(12, 18, 24, 0.97) !important;
+    border: 1px solid rgba(0, 229, 255, 0.2) !important;
+    border-radius: 12px !important;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.6), 0 0 30px rgba(0,229,255,0.08) !important;
+    padding: 0 !important;
+    overflow: hidden !important;
+    display: flex !important;
+    flex-direction: column !important;
+}
+.krunker-clean-tab-container {
+    display: flex;
+    background: rgba(8, 14, 20, 0.95);
+    border-bottom: 1px solid rgba(0, 229, 255, 0.12);
+    padding: 0 6px;
+    flex-shrink: 0;
+}
+.krunker-clean-tab {
+    flex: 1;
+    padding: 14px 8px;
+    font-size: 14px;
+    font-weight: 600;
+    letter-spacing: 0.8px;
+    color: #6b7a88;
+    cursor: pointer;
+    transition: all .25s ease;
+    border-bottom: 2px solid transparent;
+    text-align: center;
+}
+.krunker-clean-tab:hover { color: #a0c4d0; background: rgba(0,229,255,0.05); }
+.krunker-clean-tab.active { color: #00e5ff; border-bottom-color: #00e5ff; }
+.krunker-clean-content-wrap { display: flex; flex: 1; min-height: 0; overflow: hidden; }
+.krunker-clean-tab-content { flex: 1; padding: 16px 20px; overflow-y: auto; min-height: 0; }
+.krunker-clean-tab-content::-webkit-scrollbar { width: 5px; }
+.krunker-clean-tab-content::-webkit-scrollbar-thumb { background: #00a8b8; border-radius: 3px; }
+.krunker-clean-tab-pane { display: none; }
+.krunker-clean-tab-pane.active { display: block; }
+.krunker-clean-section {
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 1.2px;
+    color: #00e5ff;
+    text-transform: uppercase;
+    margin: 18px 0 10px 4px;
+    opacity: 0.85;
+}
+.krunker-clean-section:first-child { margin-top: 0; }
+.krunker-clean-menu-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 12px 16px;
+    margin: 6px 0;
+    background: rgba(20, 30, 40, 0.85);
+    border: 1px solid transparent;
+    border-radius: 8px;
+    transition: all .25s ease;
+    cursor: pointer;
+}
+.krunker-clean-menu-item:hover { background: rgba(25, 40, 55, 0.95); border-color: rgba(0,229,255,0.25); }
+.krunker-clean-menu-item.active { background: rgba(25, 40, 55, 0.95); border-color: rgba(0,229,255,0.25); }
+.krunker-clean-menu-item-content { display: flex; align-items: center; gap: 12px; }
+.krunker-clean-menu-item label {
+    color: #e0f0f5;
+    font-weight: 500;
+    font-size: 15px;
+    cursor: pointer;
+}
+.krunker-clean-controls { display: flex; align-items: center; gap: 10px; }
+.krunker-clean-toggle-switch {
+    position: relative;
+    width: 48px;
+    height: 26px;
+    background: #2a3a4a;
+    border-radius: 13px;
+    pointer-events: none;
+    transition: all .3s ease;
+}
+.krunker-clean-toggle-switch::before {
+    content: '';
+    position: absolute;
+    top: 3px; left: 3px;
+    width: 20px; height: 20px;
+    background: #8899aa;
+    border-radius: 50%;
+    transition: all .3s cubic-bezier(.68,-.55,.265,1.55);
+}
+.krunker-clean-toggle-switch.active {
+    background: linear-gradient(135deg, #00b8d4, #00e5ff);
+}
+.krunker-clean-toggle-switch.active::before { left: 25px; background: #fff; }
+.krunker-clean-slider-container { display: flex; align-items: center; gap: 10px; min-width: 190px; }
+.krunker-clean-slider {
+    appearance: none; -webkit-appearance: none;
+    width: 140px; height: 6px;
+    background: #2a3a4a; border-radius: 3px; outline: none;
+}
+.krunker-clean-slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 18px; height: 18px;
+    border-radius: 50%; background: #fff;
+    box-shadow: 0 1px 4px rgba(0,0,0,.3); cursor: grab;
+}
+.krunker-clean-slider-value {
+    color: #e0f0f5; font-weight: 600; font-size: 14px;
+    width: 55px; text-align: center;
+    background: rgba(15, 25, 35, 0.9);
+    border: 1px solid rgba(0,229,255,0.15);
+    border-radius: 4px; padding: 4px 6px;
+}
+.krunker-clean-color-preview {
+    width: 34px; height: 26px;
+    border: 2px solid rgba(255,255,255,.15);
+    border-radius: 4px; pointer-events: none;
+}
+.krunker-clean-color-picker-input {
+    opacity: 0; position: absolute; width: 42px; height: 28px; cursor: pointer;
+}
+.krunker-clean-color-container { position: relative; }
+#krunker-clean-notify-wrap {
+    position: fixed; top: 16px; right: 16px; z-index: 20000;
+    display: flex; flex-direction: column; gap: 10px;
+}
+.krunker-clean-notify-card {
+    font-family: 'Inter', sans-serif;
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 12px 16px;
+    background: rgba(12, 18, 24, 0.95);
+    border: 1px solid rgba(0,229,255,0.25);
+    border-radius: 12px;
+    width: min(92vw, 360px);
+    transform: translateX(calc(100% + 20px));
+    opacity: 0;
+    transition: transform .35s ease, opacity .35s ease;
+}
+.krunker-clean-notify-card.visible {
+    transform: translateX(0); opacity: 1;
+    box-shadow: 0 10px 25px rgba(0,229,255,0.12);
+}
+.krunker-clean-notify-title { color: #e0f0f5; font-weight: 700; font-size: 14px; }
+.krunker-clean-notify-message { color: #6b7a88; font-size: 12px; margin-top: 3px; }
+.krunker-clean-notify-action-btn {
+    background: rgba(0,229,255,0.12);
+    color: #00e5ff;
+    padding: 5px 12px;
+    border-radius: 4px;
+    font-size: 12px; font-weight: 700;
+    border: 1px solid rgba(0,229,255,0.3);
+    cursor: pointer;
+}
+`;
+
+            const style = document.createElement('style');
+            style.textContent = menuCSS;
+            document.head.appendChild(style);
+
+            this.GUI.windowIndex = window.windows.length + 1;
+            this.GUI.windowObj = {
+                closed: false,
+                header: "Krunker Clean",
+                html: "",
+                extraCls: "krunker-clean-menu-container",
+                gen: () => this.getGuiHtml(),
+                hideScroll: true,
+                height: 'calc(100% - 120px)',
+                width: 720,
+            };
+
+            Object.defineProperty(window.windows, window.windows.length, { value: this.GUI.windowObj });
+        }
+
+        getGuiHtml() {
+            const tips = {
+                aimbotEnabled: 'Master aimbot toggle.',
+                aimbotOnRightMouse: 'Only activate when right mouse held.',
+                aimbotWallCheck: 'No target through walls.',
+                aimbotWallBangs: 'Shoot through penetrable walls.',
+                aimbotTeamCheck: 'No target teammates.',
+                aimbotBotCheck: 'Target AI/bots.',
+                autoFireEnabled: 'Auto fires when target acquired.',
+                superSilentEnabled: 'Aims without moving camera.',
+                fovSize: 'FOV radius. 0 = full screen.',
+                drawFovCircle: 'Displays FOV circle.',
+                espTeamCheck: 'No ESP for teammates.',
+                espBotCheck: 'ESP for AI/bots.',
+                espLines: 'Line from bottom to enemies.',
+                espSquare: 'Box around enemies.',
+                espNameTags: 'Name, health, weapon info.',
+                espWeaponIcons: 'Weapon icon in info.',
+                espInfoBackground: 'Background for info panel.',
+                bhopEnabled: 'Hold space auto-jump.',
+                antiAimEnabled: 'Makes you harder to hit.',
+                autoNuke: 'Auto nuke when available.',
+                antikick: 'Prevents inactivity kick (risky).',
+                autoReload: 'Auto reload when empty.',
+                unlockSkins: 'Client-side skin unlocker (risky).',
+            };
+
+            setTimeout(() => this.bindMenuEvents(), 100);
+
+            return `
+                <div class="krunker-clean-tab-container">
+                    <div class="krunker-clean-tab active" data-tab="aimbot">AIMBOT</div>
+                    <div class="krunker-clean-tab" data-tab="esp">ESP</div>
+                    <div class="krunker-clean-tab" data-tab="misc">MISC</div>
+                </div>
+                <div class="krunker-clean-content-wrap">
+                    <div class="krunker-clean-tab-content">
+                        <div class="krunker-clean-tab-pane active" id="krunker-clean-tab-aimbot">
+                            <div class="krunker-clean-section">General</div>
+                            ${this.createMenuItemHTML('toggle','aimbotEnabled','Aimbot Enabled', tips.aimbotEnabled)}
+                            ${this.createMenuItemHTML('toggle','aimbotOnRightMouse','Right Mouse Trigger', tips.aimbotOnRightMouse)}
+                            ${this.createMenuItemHTML('toggle','autoFireEnabled','Auto Fire', tips.autoFireEnabled)}
+                            ${this.createMenuItemHTML('toggle','superSilentEnabled','Super Silent Aim', tips.superSilentEnabled)}
+                            <div class="krunker-clean-section">Checks</div>
+                            ${this.createMenuItemHTML('toggle','aimbotWallCheck','Wall Check', tips.aimbotWallCheck)}
+                            ${this.createMenuItemHTML('toggle','aimbotWallBangs','WallBangs', tips.aimbotWallBangs)}
+                            ${this.createMenuItemHTML('toggle','aimbotTeamCheck','Team Check', tips.aimbotTeamCheck)}
+                            ${this.createMenuItemHTML('toggle','aimbotBotCheck','Bot Aim', tips.aimbotBotCheck)}
+                            <div class="krunker-clean-section">Legit Aim</div>
+                            ${this.createMenuItemHTML('toggle','legitAimbot','Legit AI Aim', 'Simulates human-like aiming.')}
+                            ${this.createMenuItemHTML('slider','flickSpeed','Flick Speed', 'Flick speed control.', 0, 100, 1)}
+                            ${this.createMenuItemHTML('slider','adsTremorReduction','ADS Stability %', 'Reduces tremor when ADS.', 0, 100, 1)}
+                            ${this.createMenuItemHTML('slider','aimRandomness','Aim Wandering', 'Simulates imperfect aim.', 0, 5, 0.1)}
+                            ${this.createMenuItemHTML('slider','aimTremor','Aim Tremor', 'Hand tremor simulation.', 0, 5, 0.1)}
+                            <div class="krunker-clean-section">Targeting</div>
+                            ${this.createMenuItemHTML('slider','fovSize','FOV Size', tips.fovSize, 0, 300, 1)}
+                            ${this.createMenuItemHTML('toggle','drawFovCircle','Draw FOV Circle', tips.drawFovCircle)}
+                        </div>
+                        <div class="krunker-clean-tab-pane" id="krunker-clean-tab-esp">
+                            <div class="krunker-clean-section">Visuals</div>
+                            ${this.createMenuItemHTML('toggle','espSquare','ESP Box', tips.espSquare)}
+                            ${this.createMenuItemHTML('toggle','espLines','ESP Lines', tips.espLines)}
+                            ${this.createMenuItemHTML('toggle','espNameTags','Name Tags', tips.espNameTags)}
+                            ${this.createMenuItemHTML('toggle','espWeaponIcons','Weapon Icons', tips.espWeaponIcons)}
+                            ${this.createMenuItemHTML('toggle','espInfoBackground','Info Background', tips.espInfoBackground)}
+                            ${this.createMenuItemHTML('toggle','wireframeEnabled','Wireframe', 'Wireframe rendering.')}
+                            <div class="krunker-clean-section">Filters</div>
+                            ${this.createMenuItemHTML('toggle','espTeamCheck','Team Check', tips.espTeamCheck)}
+                            ${this.createMenuItemHTML('toggle','espBotCheck','Bot ESP', tips.espBotCheck)}
+                            <div class="krunker-clean-section">Colors</div>
+                            ${this.createMenuItemHTML('color','espColor','ESP Color', 'ESP line color.')}
+                            ${this.createMenuItemHTML('color','boxColor','Box Color', 'Box & info color.')}
+                            ${this.createMenuItemHTML('color','botColor','Bot Color', 'Bot ESP color.')}
+                        </div>
+                        <div class="krunker-clean-tab-pane" id="krunker-clean-tab-misc">
+                            <div class="krunker-clean-section">Movement</div>
+                            ${this.createMenuItemHTML('toggle','bhopEnabled','Bunny Hop', tips.bhopEnabled)}
+                            <div class="krunker-clean-section">Combat</div>
+                            ${this.createMenuItemHTML('toggle','antiAimEnabled','Anti-Aim', tips.antiAimEnabled)}
+                            ${this.createMenuItemHTML('toggle','autoNuke','Auto Nuke', tips.autoNuke)}
+                            ${this.createMenuItemHTML('toggle','antikick','Anti Kick', tips.antikick)}
+                            ${this.createMenuItemHTML('toggle','autoReload','Auto Reload', tips.autoReload)}
+                            <div class="krunker-clean-section">Other</div>
+                            ${this.createMenuItemHTML('toggle','unlockSkins','Unlock All Skins', tips.unlockSkins)}
+                            ${this.createMenuItemHTML('toggle','thirdPersonEnabled','Third Person', 'Play in 3rd person view.')}
+                            ${this.createMenuItemHTML('slider','weaponZoom','Weapon Zoom', 'Adjust ADS zoom level.', 0.1, 5.0, 0.1)}
+                        </div>
+                    </div>
+                </div>`;
+        }
+
+        createMenuItemHTML(type, setting, label, tooltip = '', min, max, step) {
+            let controlHTML = '';
+            const tipAttr = tooltip ? ` title="${tooltip}"` : '';
+
+            switch (type) {
+                case 'toggle':
+                    controlHTML = `<div class="krunker-clean-toggle-switch ${this.settings[setting] ? 'active' : ''}"></div>`;
+                    break;
+                case 'color':
+                    controlHTML = `<div class="krunker-clean-color-container">
+                        <input type="color" class="krunker-clean-color-picker-input" data-setting="${setting}" value="${this.settings[setting]}">
+                        <div class="krunker-clean-color-preview" data-setting="${setting}" style="background-color: ${this.settings[setting]}"></div>
+                    </div>`;
+                    break;
+                case 'slider':
+                    const val = (this.settings && typeof this.settings[setting] !== 'undefined') ? this.settings[setting] : 0;
+                    const displayVal = val <= 0 ? 'Off' : val;
+                    controlHTML = `<div class="krunker-clean-slider-container" data-setting="${setting}">
+                        <input type="range" class="krunker-clean-slider" data-setting="${setting}" min="${min}" max="${max}" step="${step}" value="${val}">
+                        <input type="text" class="krunker-clean-slider-value" data-setting="${setting}" value="${displayVal}">
+                    </div>`;
+                    break;
+            }
+            return `<div class="krunker-clean-menu-item ${this.settings[setting] ? 'active' : ''}" data-setting="${setting}"${tipAttr}>
+                <div class="krunker-clean-menu-item-content"><label>${label}</label></div>
+                <div class="krunker-clean-controls">${controlHTML}</div>
+            </div>`;
+        }
+
+        bindMenuEvents() {
+            const menu = document.querySelector('.krunker-clean-menu-container');
+            if (!menu) return;
+
+            menu.querySelector('.krunker-clean-tab-container').addEventListener('click', (e) => {
+                if (e.target.classList.contains('krunker-clean-tab')) {
+                    const tabName = e.target.dataset.tab;
+                    menu.querySelectorAll('.krunker-clean-tab').forEach(t => t.classList.remove('active'));
+                    menu.querySelectorAll('.krunker-clean-tab-pane').forEach(p => p.classList.remove('active'));
+                    e.target.classList.add('active');
+                    menu.querySelector(`#krunker-clean-tab-${tabName}`).classList.add('active');
+                }
+            });
+
+            menu.querySelector('.krunker-clean-tab-content').addEventListener('click', (e) => {
+                const menuItem = e.target.closest('.krunker-clean-menu-item');
+                if (!menuItem) return;
+                const setting = menuItem.dataset.setting;
+                if (!setting || menuItem.querySelector('.krunker-clean-slider-container')) return;
+
+                if (menuItem.querySelector('.krunker-clean-toggle-switch')) {
+                    this.settings[setting] = !this.settings[setting];
+                    this.saveSettings('krunkerclean_settings', this.settings);
+                    menuItem.classList.toggle('active');
+                    menuItem.querySelector('.krunker-clean-toggle-switch').classList.toggle('active');
+                } else if (menuItem.querySelector('.krunker-clean-color-picker-input')) {
+                    menuItem.querySelector('.krunker-clean-color-picker-input').click();
+                }
+            });
+
+            menu.querySelectorAll('.krunker-clean-color-picker-input').forEach(cp => {
+                cp.addEventListener('input', (e) => {
+                    const setting = e.target.dataset.setting;
+                    this.settings[setting] = e.target.value;
+                    this.saveSettings('krunkerclean_settings', this.settings);
+                    menu.querySelector(`.krunker-clean-color-preview[data-setting="${setting}"]`).style.backgroundColor = e.target.value;
+                });
+            });
+
+            menu.querySelectorAll('.krunker-clean-slider').forEach(slider => {
+                const setting = slider.dataset.setting;
+                const valueInput = menu.querySelector(`.krunker-clean-slider-value[data-setting="${setting}"]`);
+                slider.addEventListener('input', () => {
+                    const value = slider.value;
+                    this.settings[setting] = Number(value);
+                    if (valueInput) valueInput.value = value <= 0 ? 'Off' : value;
+                });
+                slider.addEventListener('change', () => this.saveSettings('krunkerclean_settings', this.settings));
+            });
+        }
+
+        addEventListeners() {
+            window.addEventListener('pointerdown', (e) => { if (e.button === 2) this.rightMouseDown = true; });
+            window.addEventListener('pointerup', (e) => { if (e.button === 2) this.rightMouseDown = false; });
+
+            window.addEventListener('keydown', (e) => {
+                this.pressedKeys.add(e.code);
+                if (document.activeElement?.tagName === "INPUT" || document.activeElement?.tagName === "TEXTAREA") return;
+
+                const action = Object.keys(this.hotkeys).find(key => this.hotkeys[key] === e.code);
+                if (action) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    if (action === 'toggleMenu') {
+                        this.showGUI();
+                    } else if (this.settings.hasOwnProperty(action)) {
+                        this.settings[action] = !this.settings[action];
+                        this.saveSettings('krunkerclean_settings', this.settings);
+                        this.notify({
+                            title: "Toggled",
+                            message: `${action}: ${this.settings[action] ? 'ON' : 'OFF'}`
+                        });
+                    }
+                }
+            });
+            window.addEventListener('keyup', (e) => { this.pressedKeys.delete(e.code); });
+        }
+
+        isDefined(val) { return val !== undefined && val !== null; }
+        isTeam(player) { return this.me && this.me.team ? this.me.team === player.team : false; }
+        getDistanceSq(p1, p2) {
+            return (p2.x - p1.x) ** 2 + (p2.y - p1.y) ** 2 + (p2.z - p1.z) ** 2;
+        }
+        getDirection(z1, x1, z2, x2) { return Math.atan2(x1 - x2, z1 - z2); }
+        getXDirection(t, e, o, i, s, n) {
+            const r = s - e, a = Math.sqrt((i - t) ** 2 + (s - e) ** 2 + (n - o) ** 2);
+            return Math.asin(r / a);
+        }
+        containsPoint(point) {
+            let planes = this.renderer.frustum.planes;
+            for (let i = 0; i < 6; i++) {
+                if (planes[i].distanceToPoint(point) < 0) return false;
+            }
+            return true;
+        }
+
+        lineInRect(lx1, lz1, ly1, dx, dz, dy, x1, z1, y1, x2, z2, y2) {
+            let t1 = (x1 - lx1) * dx; let t2 = (x2 - lx1) * dx;
+            let t3 = (y1 - ly1) * dy; let t4 = (y2 - ly1) * dy;
+            let t5 = (z1 - lz1) * dz; let t6 = (z2 - lz1) * dz;
+            let tmin = Math.max(Math.max(Math.min(t1, t2), Math.min(t3, t4)), Math.min(t5, t6));
+            let tmax = Math.min(Math.min(Math.max(t1, t2), Math.max(t3, t4)), Math.max(t5, t6));
+            if (tmax < 0) return false;
+            if (tmin > tmax) return false;
+            return tmin;
+        }
+
+        getCanSee(player, boxSize) {
+            const from = this.me;
+            if (!from || !this.game?.map?.manager?.objects) return true;
+            boxSize = boxSize || 0;
+            const toX = player.x, toY = player.y, toZ = player.z;
+            let penetrableWallsHit = 0;
+            for (let obj, dist = Math.sqrt((toX - from.x) ** 2 + (toY - from.y) ** 2 + (toZ - from.z) ** 2),
+                xDr = this.getDirection(from.z, from.x, toZ, toX),
+                yDr = this.getDirection(Math.sqrt((toX - from.x) ** 2 + (toZ - from.z) ** 2), toY, 0, from.y),
+                dx = 1 / (dist * Math.sin(xDr - Math.PI) * Math.cos(yDr)),
+                dz = 1 / (dist * Math.cos(xDr - Math.PI) * Math.cos(yDr)),
+                dy = 1 / (dist * Math.sin(yDr)),
+                yOffset = from.y + (from.height || this.PLAYER_HEIGHT) - this.CAMERA_HEIGHT,
+                i = 0; i < this.game.map.manager.objects.length; ++i) {
+                let tmpDst;
+                if (!(obj = this.game.map.manager.objects[i]).noShoot && obj.active && obj.transparent !== false &&
+                    (tmpDst = this.lineInRect(from.x, from.z, yOffset, dx, dz, dy,
+                        obj.x - Math.max(0, obj.width - boxSize),
+                        obj.z - Math.max(0, obj.length - boxSize),
+                        obj.y - Math.max(0, obj.height - boxSize),
+                        obj.x + Math.max(0, obj.width - boxSize),
+                        obj.z + Math.max(0, obj.length - boxSize),
+                        obj.y + Math.max(0, obj.height - boxSize))) && 1 > tmpDst) {
+                    if (!this.settings.aimbotWallBangs || !obj.penetrable || !this.me.weapon.pierce) {
+                        return false;
+                    }
+                    penetrableWallsHit++;
+                }
+            }
+            return penetrableWallsHit <= 1;
+        }
+
+        async waitFor(condition, timeout = Infinity) {
+            const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+            return new Promise(async (resolve, reject) => {
+                if (typeof timeout != 'number') reject('Timeout argument not a number in waitFor');
+                let result;
+                while (result === undefined || result === false || result === null || result.length === 0) {
+                    if ((timeout -= 100) < 0) { resolve(false); return; }
+                    await sleep(100);
+                    result = typeof condition === 'string' ? Function(condition)() : condition();
+                }
+                resolve(result);
+            });
+        }
+
+        lookDir(xDire, yDire) {
+            this.controls.object.rotation.y = yDire;
+            this.controls[this.vars.pchObjc].rotation.x = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, xDire));
+            this.controls.yDr = this.controls[this.vars.pchObjc].rotation.x % Math.PI;
+            this.controls.xDr = this.controls.object.rotation.y % Math.PI;
+            this.renderer.camera.updateProjectionMatrix();
+            this.renderer.updateFrustum();
+        }
+
+        resetLookAt() {
+            this.controls.object.rotation.y = this.controls.xDr;
+            this.controls[this.vars.pchObjc].rotation.x = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, this.controls.yDr));
+            this.renderer.camera.updateProjectionMatrix();
+            this.renderer.updateFrustum();
+        }
+
+        world2Screen(worldPosition) {
+            if (!this.renderer?.camera || !this.overlay?.canvas) return null;
+            this.tempVector.set(worldPosition.x, worldPosition.y, worldPosition.z);
+            this.tempVector.project(this.renderer.camera);
+            if (this.tempVector.z > 1) return null;
+            return {
+                x: (this.tempVector.x + 1) / 2 * this.overlay.canvas.width,
+                y: (-this.tempVector.y + 1) / 2 * this.overlay.canvas.height
+            };
+        }
+
+        drawCanvasESP(player, isBot) {
+            if (this.settings.espTeamCheck && this.isTeam(player)) return;
+            const playerPos = { x: player.x, y: player.y, z: player.z };
+            const effectiveHeight = isBot ? player.dat.mSize : (player.height || this.PLAYER_HEIGHT) - ((player.crouchVal || 0) * this.CROUCH_FACTOR);
+            const halfWidth = isBot ? (player.dat.mSize * 0.4) / 2 : this.PLAYER_WIDTH / 2;
+            const corners = [
+                { x: playerPos.x - halfWidth, y: playerPos.y, z: playerPos.z - halfWidth },
+                { x: playerPos.x + halfWidth, y: playerPos.y, z: playerPos.z - halfWidth },
+                { x: playerPos.x - halfWidth, y: playerPos.y, z: playerPos.z + halfWidth },
+                { x: playerPos.x + halfWidth, y: playerPos.y, z: playerPos.z + halfWidth },
+                { x: playerPos.x - halfWidth, y: playerPos.y + effectiveHeight, z: playerPos.z - halfWidth },
+                { x: playerPos.x + halfWidth, y: playerPos.y + effectiveHeight, z: playerPos.z - halfWidth },
+                { x: playerPos.x - halfWidth, y: playerPos.y + effectiveHeight, z: playerPos.z + halfWidth },
+                { x: playerPos.x + halfWidth, y: playerPos.y + effectiveHeight, z: playerPos.z + halfWidth },
+            ];
+
+            let xmin = Infinity, ymin = Infinity, xmax = -Infinity, ymax = -Infinity, onScreen = false;
+            for (let i = 0; i < corners.length; i++) {
+                const screenPos = this.world2Screen(corners[i]);
+                if (screenPos) {
+                    onScreen = true;
+                    xmin = Math.min(xmin, screenPos.x);
+                    xmax = Math.max(xmax, screenPos.x);
+                    ymin = Math.min(ymin, screenPos.y);
+                    ymax = Math.max(ymax, screenPos.y);
+                }
+            }
+            if (!onScreen || !isFinite(xmin + xmax + ymin + ymax)) return;
+            const boxWidth = xmax - xmin;
+            const boxHeight = ymax - ymin;
+            CRC2d.save.apply(this.ctx, []);
+
+            if (this.settings.espLines) {
+                const startX = this.overlay.canvas.width / 2;
+                const startY = this.overlay.canvas.height;
+                const endX = xmin + boxWidth / 2;
+                const endY = ymax;
+                const trailColor = isBot ? this.settings.botColor : this.settings.espColor;
+                const hexToRgba = (hex, alpha) => {
+                    let r = 0, g = 0, b = 0;
+                    if (hex.length == 7) {
+                        r = parseInt(hex.slice(1, 3), 16);
+                        g = parseInt(hex.slice(3, 5), 16);
+                        b = parseInt(hex.slice(5, 7), 16);
+                    }
+                    return `rgba(${r},${g},${b},${alpha})`;
+                };
+                const gradient = this.ctx.createLinearGradient(startX, startY, endX, endY);
+                gradient.addColorStop(0, hexToRgba(trailColor, 0.7));
+                gradient.addColorStop(1, hexToRgba(trailColor, 0));
+                this.ctx.lineWidth = 2.5;
+                this.ctx.strokeStyle = gradient;
+                this.ctx.shadowColor = trailColor;
+                this.ctx.shadowBlur = 15;
+                CRC2d.beginPath.apply(this.ctx, []);
+                CRC2d.moveTo.apply(this.ctx, [startX, startY]);
+                CRC2d.lineTo.apply(this.ctx, [endX, endY]);
+                CRC2d.stroke.apply(this.ctx, []);
+            }
+
+            if (this.settings.espSquare) {
+                this.ctx.shadowColor = this.settings.boxColor;
+                this.ctx.shadowBlur = 10;
+                this.ctx.lineWidth = 1.5;
+                this.ctx.strokeStyle = isBot ? this.settings.botColor : this.settings.boxColor;
+                CRC2d.strokeRect.apply(this.ctx, [xmin, ymin, boxWidth, boxHeight]);
+            }
+
+            if (player.health && player.maxHealth) {
+                const healthPercentage = Math.max(0, player.health / player.maxHealth);
+                const barX = xmin - 7;
+                const barY = ymin;
+                const barWidth = 4;
+                const barHeight = boxHeight;
+                this.ctx.fillStyle = "rgba(0,0,0,0.5)";
+                CRC2d.fillRect.apply(this.ctx, [barX, barY, barWidth, barHeight]);
+                this.ctx.fillStyle = healthPercentage > 0.75 ? "#43A047" : healthPercentage > 0.4 ? "#FDD835" : "#E53935";
+                CRC2d.fillRect.apply(this.ctx, [barX, barY + barHeight * (1 - healthPercentage), barWidth, barHeight * healthPercentage]);
+                this.ctx.font = "bold 11px Inter, sans-serif";
+                this.ctx.textAlign = "right";
+                this.ctx.fillStyle = "#FFFFFF";
+                this.ctx.shadowColor = '#000000';
+                this.ctx.shadowBlur = 4;
+                CRC2d.fillText.apply(this.ctx, [`â¥ ${Math.round(player.health)}`, barX - 4, barY + 11]);
+            }
+
+            if (this.settings.espNameTags) {
+                this.ctx.font = "bold 11px Inter, sans-serif";
+                this.ctx.textAlign = "left";
+                const padding = 4;
+                const iconHeight = 16;
+                const borderRadius = 4;
+                let iconWidth = 0;
+                const hasWeapon = player.weapon && player.weapon.name;
+                let weaponIcon = null;
+                if (hasWeapon && this.settings.espWeaponIcons && player.weapon.icon) {
+                    if (!this.weaponIconCache) this.weaponIconCache = {};
+                    const cacheKey = (player.weapon.melee ? 'melee_' : 'weapons_') + player.weapon.icon;
+                    if (!this.weaponIconCache[cacheKey]) {
+                        this.weaponIconCache[cacheKey] = new Image();
+                        this.weaponIconCache[cacheKey].src = `https://assets.krunker.io/textures/${player.weapon.melee ? 'melee' : 'weapons'}/${player.weapon.icon}.png`;
+                    }
+                    weaponIcon = this.weaponIconCache[cacheKey];
+                    if (weaponIcon.complete && weaponIcon.naturalWidth > 0) {
+                        iconWidth = weaponIcon.width * (iconHeight / weaponIcon.height);
+                    }
+                }
+                const namePart = isBot ? `[AI] ${player.name || 'Bot'}` : player.level ? `[LVL ${player.level}] ${player.name || 'Player'}` : `${player.name || 'Player'}`;
+                const weaponPart = hasWeapon ? ` â¢ ${player.weapon.name}` : '';
+                const fullText = namePart + weaponPart;
+                const fullTextWidth = this.ctx.measureText(fullText).width;
+                const infoBoxWidth = fullTextWidth + (iconWidth > 0 ? iconWidth + padding : 0) + padding * 2;
+                const infoBoxHeight = 20;
+                const infoBoxX = (xmin + boxWidth / 2) - (infoBoxWidth / 2);
+                const infoBoxY = ymin - infoBoxHeight - 5;
+
+                if (this.settings.espInfoBackground) {
+                    this.ctx.fillStyle = "rgba(10, 20, 30, 0.65)";
+                    this.ctx.strokeStyle = isBot ? this.settings.botColor : this.settings.boxColor;
+                    this.ctx.lineWidth = 1;
+                    this.ctx.shadowColor = isBot ? this.settings.botColor : this.settings.boxColor;
+                    this.ctx.shadowBlur = 6;
+                    CRC2d.beginPath.apply(this.ctx, []);
+                    CRC2d.moveTo.apply(this.ctx, [infoBoxX + borderRadius, infoBoxY]);
+                    CRC2d.lineTo.apply(this.ctx, [infoBoxX + infoBoxWidth - borderRadius, infoBoxY]);
+                    CRC2d.arcTo.apply(this.ctx, [infoBoxX + infoBoxWidth, infoBoxY, infoBoxX + infoBoxWidth, infoBoxY + borderRadius, borderRadius]);
+                    CRC2d.lineTo.apply(this.ctx, [infoBoxX + infoBoxWidth, infoBoxY + infoBoxHeight - borderRadius]);
+                    CRC2d.arcTo.apply(this.ctx, [infoBoxX + infoBoxWidth, infoBoxY + infoBoxHeight, infoBoxX + infoBoxWidth - borderRadius, infoBoxY + infoBoxHeight, borderRadius]);
+                    CRC2d.lineTo.apply(this.ctx, [infoBoxX + borderRadius, infoBoxY + infoBoxHeight]);
+                    CRC2d.arcTo.apply(this.ctx, [infoBoxX, infoBoxY + infoBoxHeight, infoBoxX, infoBoxY + infoBoxHeight - borderRadius, borderRadius]);
+                    CRC2d.lineTo.apply(this.ctx, [infoBoxX, infoBoxY + borderRadius]);
+                    CRC2d.arcTo.apply(this.ctx, [infoBoxX, infoBoxY, infoBoxX + borderRadius, infoBoxY, borderRadius]);
+                    CRC2d.closePath.apply(this.ctx, []);
+                    CRC2d.fill.apply(this.ctx, []);
+                    CRC2d.stroke.apply(this.ctx, []);
+                }
+                this.ctx.fillStyle = "#FFFFFF";
+                this.ctx.shadowColor = '#000000';
+                this.ctx.shadowBlur = 4;
+                CRC2d.fillText.apply(this.ctx, [fullText, infoBoxX + padding, infoBoxY + infoBoxHeight / 2 + 4]);
+                if (weaponIcon && weaponIcon.complete && iconWidth > 0) {
+                    this.ctx.drawImage(weaponIcon, infoBoxX + padding + fullTextWidth + padding, infoBoxY + (infoBoxHeight - iconHeight) / 2, iconWidth, iconHeight);
+                }
+                this.ctx.shadowBlur = 0;
+                const distance = Math.round(Math.sqrt((this.me.x - player.x) ** 2 + (this.me.y - player.y) ** 2 + (this.me.z - player.z) ** 2) / 10);
+                this.ctx.textAlign = "center";
+                this.ctx.fillStyle = "#FFFFFF";
+                this.ctx.shadowColor = '#000000';
+                this.ctx.shadowBlur = 4;
+                CRC2d.fillText.apply(this.ctx, [`[${distance}m]`, xmin + boxWidth / 2, ymax + 14]);
+            }
+            CRC2d.restore.apply(this.ctx, []);
+        }
+    }
+
+    window[uniqueId] = new KrunkerClean();
+
+})('krunker_clean_' + Math.random().toString(36).substring(2, 10), CanvasRenderingContext2D.prototype);
